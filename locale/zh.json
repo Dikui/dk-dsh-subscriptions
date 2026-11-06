@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "dsh-dk-subscriptions",
+    "description": "通过官方授权连接 OpenAI Codex 与 Kimi Coding 订阅，管理共用凭证，并手动测试所选模型。Grok 授权尚未确认。"
+  }
+}
