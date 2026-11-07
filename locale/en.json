@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "dsh-dk-subscriptions",
-    "description": "Connect OpenAI Codex and Kimi Coding subscriptions through official authorization, manage shared credentials, and explicitly test a selected model. Grok authorization remains unconfirmed."
+    "description": "Connect OpenAI Codex, Kimi Coding and Grok through the official SDK’s OAuth, manage shared credentials, and explicitly test a model. Grok account access and subscription-only billing are not verified."
   }
 }

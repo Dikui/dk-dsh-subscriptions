@@ -10,7 +10,7 @@ function makePopup(replace = () => {}) {
   const document = { title: '', body: { textContent: '' }, head: { append: value => meta.push(value) }, createElement: () => ({}) };
   return { closed: false, opener: {}, document, meta, location: { href: 'about:blank', replace }, close() { this.closed = true; } };
 }
-function flowServer() {
+function flowServer(provider = 'kimi-coding') {
   let attempt = null;
   const events = [];
   return {
@@ -29,7 +29,7 @@ function flowServer() {
         }
         if (body.action === 'cancel') { attempt = { ...attempt, state: 'cancelled' }; return Response.json({ ok: true }); }
       }
-      return Response.json(initialStatus(attempt));
+      return Response.json(initialStatus(attempt, provider));
     },
   };
 }
@@ -54,6 +54,29 @@ test('Connect reserves a tab before the async request, then opens the trusted Ki
     await panel.poll(); assert.deepEqual(destinations, [url], 'do not launch a tab on every poll');
     await panel.click('Cancel authorization');
     assert.equal(closed, false, 'do not close a tab after navigating it to the provider');
+  } finally { panel.dispose(); }
+});
+
+// small/spec — feature/grok-subscription; official accounts origin, SYNTHETIC device path/code.
+test('Grok device notices open only the allowlisted accounts origin and preserve copy fallback', async () => {
+  const server = flowServer('xai'), destinations = [], copied = [];
+  const deviceUrl = 'https://accounts.x.ai/synthetic-device?user_code=TEST-CODE';
+  const panel = await panelHarness({ fetch: server.fetch, open: () => makePopup(value => destinations.push(value)),
+    clipboard: { writeText: async value => copied.push(value) } });
+  try {
+    await panel.click('Connect', 'Grok');
+    server.setNotices([{ ...notice, url: deviceUrl }]); await panel.poll();
+    assert.deepEqual(destinations, [deviceUrl]);
+    await panel.click('Copy authorization link', 'Grok');
+    await panel.click('Copy code', 'Grok');
+    assert.deepEqual(copied, [deviceUrl, 'TEST-CODE']);
+    for (const rejected of ['https://accounts.x.ai.evil.example/device', 'http://accounts.x.ai/device',
+      'https://accounts.x.ai:444/device', 'https://auth.x.ai/device', 'https://www.kimi.com/code/oauth']) {
+      server.setNotices([{ ...notice, url: rejected }]); await panel.poll();
+      assert.equal(panel.within('Grok').some(node => node.type === 'a' && node.props.href === rejected), false);
+      assert.equal(panel.within('Grok').some(node => node.type === 'input' && node.props.value === rejected), false);
+    }
+    assert.deepEqual(destinations, [deviceUrl]);
   } finally { panel.dispose(); }
 });
 
@@ -201,6 +224,33 @@ test('account model refresh replaces any registered vendor’s names without a m
       assert.equal(card().find(node => node.type === 'select').props.value, 'server-new');
       assert.deepEqual(card().filter(node => node.type === 'option').map(node => node.props.value), ['server-new']);
       assert.deepEqual(calls, [{ provider: id, action: 'models' }]);
+    } finally { panel.dispose(); }
+  }
+});
+
+// small/spec — feature/grok-subscription; no request may precede the billing confirmation.
+test('Grok warns about extra charges in both languages and tests only after confirmation', async () => {
+  for (const language of ['en', 'zh']) {
+    const state = initialStatus(), posts = [], confirmations = [];
+    const grok = state.providers.find(provider => provider.id === 'xai');
+    grok.configured = true; grok.credentialKind = 'grant';
+    let allowed = false;
+    const panel = await panelHarness({ language, confirm: message => { confirmations.push(message); return allowed; },
+      fetch: async (_url, options = {}) => {
+        if (options.method === 'POST') { posts.push(JSON.parse(options.body)); return Response.json({ ok: true, text: '2' }); }
+        return Response.json(state);
+      } });
+    try {
+      const label = language === 'en' ? 'Test selected model · uses quota' : '测试所选模型 · 消耗额度';
+      const warning = language === 'en' ? /extra charges/ : /额外收费/;
+      assert.match(panel.text(), warning);
+      assert.equal(panel.within('Grok').some(node => node.type === 'button' && /Refresh account models|刷新账号模型/.test(node.props.children.join(''))), false);
+      await panel.click(label, 'Grok');
+      assert.match(confirmations[0], warning);
+      assert.match(confirmations[0], /grok-test/);
+      assert.deepEqual(posts, []);
+      allowed = true; await panel.click(label, 'Grok');
+      assert.deepEqual(posts, [{ provider: 'xai', action: 'test', model: 'grok-test' }]);
     } finally { panel.dispose(); }
   }
 });

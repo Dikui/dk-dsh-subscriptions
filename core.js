@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 export const PROVIDERS = Object.freeze([
   { id: 'openai-codex', name: 'OpenAI · ChatGPT', route: 'subscription-openai-codex' },
   { id: 'kimi-coding', name: 'Kimi Code', route: 'subscription-kimi-coding' },
-  { id: 'xai', name: 'Grok', route: null },
+  { id: 'xai', name: 'Grok', route: 'subscription-xai' },
 ]);
 
 export class SubscriptionError extends Error {
@@ -35,7 +35,7 @@ export function oauthRecord(record) {
     && Number.isFinite(grant.expires) ? grant : undefined;
 }
 
-// Only these two isolated routes can read the official adapter's OAuth records.
+// Only these isolated routes can read the official adapter's OAuth records.
 // There is deliberately no API-key handler, environment lookup or fallback route.
 export function subscriptionBindings(credentials, catalog, keyFor) {
   const routes = new Map(PROVIDERS.filter(p => p.route).map(p => [p.route, p.id]));

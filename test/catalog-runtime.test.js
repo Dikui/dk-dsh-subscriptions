@@ -11,15 +11,16 @@ try {
   adapterEntry = module.createRequire(selected).resolve('@deepseek-ai/dsh-llm-pi-ai');
 } catch (error) { if (process.env.DSH_TEST_UNDICI) throw error; }
 
-// small/regression — real plugin apply + shipped adapter; all credentials are
-// in memory, metadata uses MockAgent, inference is a throw-only fake transport.
-test('registered model sources share native routes and freeze each vendor’s prepared descriptors', {
+// small/regression — subscription runtime task: real plugin apply + shipped adapter.
+// Synthetic in-memory grants only; MockAgent replaces HTTP and forbids external connections.
+test('registered subscription routes preserve their native runtime contracts', {
   skip: !undici || !module.registerHooks ? 'Set DSH_TEST_UNDICI and use the desktop Node runtime.' : false,
-}, async () => {
+}, async t => {
   const previous = undici.getGlobalDispatcher();
-  const env = process.env.HTTPS_PROXY;
+  const env = process.env.HTTPS_PROXY, xaiKey = process.env.XAI_API_KEY;
   process.env.HTTPS_PROXY = 'http://synthetic-explicit-proxy.invalid:80'; // Leave automatic system discovery inactive.
-  const agent = new undici.MockAgent();
+  process.env.XAI_API_KEY = 'SYNTHETIC-AMBIENT-PAID';
+  const agent = new undici.MockAgent({ enableCallHistory: true });
   agent.disableNetConnect();
   const row = context => ({ slug: 'server-only-model', display_name: 'Account Model', visibility: 'list',
     supported_in_api: true, input_modalities: ['text'], context_window: context,
@@ -55,11 +56,14 @@ test('registered model sources share native routes and freeze each vendor’s pr
         return records.get(key);
       },
     };
+    const llm = {
+      registerAdapter(routes, value) { assert.ok(routes.includes('subscription-xai')); adapter = value; },
+      emitAdaptersUpdated() {}, stream: () => assert.fail('No inference in metadata tests'),
+    };
     await apply({ credentials,
       on(event, callback) { assert.equal(event, 'dispose'); dispose.push(callback); }, get() {},
-      authorization: { describe: () => ({ methods: [{ id: 'oauth' }] }), begin: () => assert.fail('No login in metadata tests') },
-      llm: { registerAdapter(_routes, value) { adapter = value; }, emitAdaptersUpdated() {}, stream: () => assert.fail('No inference in metadata tests') },
-      connection: { fetch: { register() {} } }, tools: { register(value) { tool = value; } },
+      authorization: { describe: () => ({ methods: [{ id: 'oauth' }] }), begin: () => assert.fail('No login in offline tests') },
+      llm, connection: { fetch: { register() {} } }, tools: { register(value) { tool = value; } },
     });
     const exec = { signal: new AbortController().signal };
     const vendors = [
@@ -100,6 +104,93 @@ test('registered model sources share native routes and freeze each vendor’s pr
       await consume(adapter.stream(options));
       assert.equal(sent[1]?.contextWindow, 200000);
     }
+    // Grok has SDK-local descriptors, not a verified account-discovery endpoint.
+    agent.clearCallHistory();
+    const route = 'subscription-xai', key = native.recordKeyFor('xai');
+    const state = (await tool.execute({ action: 'status' }, exec)).providers.find(item => item.id === 'xai');
+    assert.equal(state.available, true);
+    assert.equal(state.configured, false);
+    assert.deepEqual(state.modelCatalog, { source: 'local', state: 'ready', error: null, updatedAt: null });
+    const model = state.models[0]?.id;
+    assert.ok(model);
+    assert.equal((await tool.execute({ action: 'models', provider: 'xai' }, exec)).error, 'MODEL_CATALOG_UNAVAILABLE');
+    const options = { provider: route, model, maxTokens: 32,
+      apiKey: 'SYNTHETIC-CALLER-PAID', headers: { authorization: 'Bearer SYNTHETIC-CALLER-PAID' },
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Synthetic' }] }] };
+    llm.stream = request => adapter.stream({ ...request, apiKey: options.apiKey, headers: options.headers });
+    await t.test('Grok rejects missing OAuth and stored paid keys despite ambient or caller keys', async () => {
+      for (const record of [undefined, { kind: 'api-key', key: 'SYNTHETIC-STORED-PAID' }]) {
+        if (record) records.set(key, record); else records.delete(key);
+        assert.deepEqual(await adapter.listModels(route), []);
+        await assert.rejects(Array.fromAsync(adapter.stream(options)), { code: 'MISSING_CREDENTIAL' });
+        const prepared = await adapter.prepareCall(route, model);
+        await assert.rejects(Array.fromAsync(prepared.stream(options)), { code: 'MISSING_CREDENTIAL' });
+        assert.equal((await tool.execute({ action: 'test', provider: 'xai', model }, exec)).error, 'MISSING_CREDENTIAL');
+      }
+      assert.equal(agent.getCallHistory().calls().length, 0);
+    });
+    await t.test('Grok refreshes expired OAuth before native Responses inference without paid-key fallback', async () => {
+      records.set(key, { kind: 'grant', payload: { type: 'oauth', access: 'SYNTHETIC-XAI-EXPIRED',
+        refresh: 'SYNTHETIC-XAI-REFRESH', expires: Date.now() - 1 } });
+      let refreshBody;
+      agent.get('https://auth.x.ai').intercept({ method: 'POST', path: '/oauth2/token' })
+        .reply(200, async ({ body }) => {
+          refreshBody = new URLSearchParams(await new Response(body).text());
+          return { access_token: 'SYNTHETIC-XAI-ROTATED', refresh_token: 'SYNTHETIC-XAI-ROTATED-REFRESH', expires_in: 3600 };
+        }, { headers: { 'content-type': 'application/json' } });
+      const item = { id: 'msg_SYNTHETIC', type: 'message', role: 'assistant', status: 'completed',
+        content: [{ type: 'output_text', text: '2', annotations: [] }] };
+      const sse = [
+        { type: 'response.output_item.added', output_index: 0, item: { ...item, status: 'in_progress', content: [] } },
+        { type: 'response.content_part.added', output_index: 0, content_index: 0, part: { ...item.content[0], text: '' } },
+        { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: '2' },
+        { type: 'response.output_item.done', output_index: 0, item },
+        { type: 'response.completed', response: { id: 'resp_SYNTHETIC', status: 'completed', output: [item],
+          usage: { input_tokens: 3, output_tokens: 1, total_tokens: 4 } } },
+      ].map(event => `data: ${JSON.stringify(event)}\n\n`).join('');
+      const requests = [];
+      agent.get('https://api.x.ai').intercept({ method: 'POST', path: '/v1/responses' })
+        .reply(200, async ({ headers, body }) => {
+          requests.push({ bearer: new Headers(headers).get('authorization'), body: JSON.parse(await new Response(body).text()) });
+          return sse;
+        }, { headers: { 'content-type': 'text/event-stream' } }).times(2);
+      assert.deepEqual((await adapter.listModels(route)).map(item => item.id), state.models.map(item => item.id));
+      const prepared = await adapter.prepareCall(route, model);
+      const chunks = await Array.fromAsync(prepared.stream(options));
+      assert.equal(chunks.filter(chunk => chunk.type === 'text-delta').map(chunk => chunk.text).join(''), '2');
+      assert.equal(chunks.find(chunk => chunk.type === 'finish')?.reason.kind, 'stop');
+      assert.deepEqual(await tool.execute({ action: 'test', provider: 'xai', model }, exec), { ok: true, model, text: '2' });
+      assert.equal(refreshBody.get('grant_type'), 'refresh_token');
+      assert.equal(refreshBody.get('refresh_token'), 'SYNTHETIC-XAI-REFRESH');
+      assert.equal(requests.length, 2);
+      for (const request of requests) {
+        assert.equal(request.bearer, 'Bearer SYNTHETIC-XAI-ROTATED');
+        assert.equal(request.body.model, model);
+        assert.equal(request.body.stream, true);
+        assert.equal(request.body.store, false);
+        assert.ok(Array.isArray(request.body.input));
+        assert.ok(!JSON.stringify(request.body).includes('SYNTHETIC-CALLER-PAID'));
+      }
+      assert.deepEqual(requests.map(request => request.body.max_output_tokens), [32, 256]);
+      assert.deepEqual(agent.getCallHistory().calls().map(call => [call.method, call.origin, call.path]), [
+        ['POST', 'https://auth.x.ai', '/oauth2/token'],
+        ['POST', 'https://api.x.ai', '/v1/responses'], ['POST', 'https://api.x.ai', '/v1/responses'],
+      ]);
+    });
+    for (const status of [401, 403, 429]) await t.test(`Grok HTTP ${status} is sanitized after one OAuth request without retry or fallback`, async () => {
+      agent.clearCallHistory();
+      agent.get('https://api.x.ai').intercept({ method: 'POST', path: '/v1/responses',
+        headers: { authorization: 'Bearer SYNTHETIC-XAI-ROTATED' } })
+        .reply(status, { error: { message: 'SYNTHETIC-XAI-ROTATED SYNTHETIC-CALLER-PAID upstream diagnostic' } },
+          { headers: { 'content-type': 'application/json' } });
+      assert.deepEqual(await tool.execute({ action: 'test', provider: 'xai', model }, exec), {
+        error: 'TEST_FAILED', message: 'The subscription operation did not complete. Check authorization and retry.',
+      });
+      assert.deepEqual(agent.getCallHistory().calls().map(call => [call.method, call.origin, call.path]), [
+        ['POST', 'https://api.x.ai', '/v1/responses'],
+      ]);
+      assert.equal(agent.pendingInterceptors().length, 0);
+    });
     assert.equal(agent.pendingInterceptors().length, 0);
   } finally {
     for (const close of dispose.reverse()) await close();
@@ -110,5 +201,6 @@ test('registered model sources share native routes and freeze each vendor’s pr
     hooks.deregister(); undici.setGlobalDispatcher(previous);
     await agent.close();
     if (env === undefined) delete process.env.HTTPS_PROXY; else process.env.HTTPS_PROXY = env;
+    if (xaiKey === undefined) delete process.env.XAI_API_KEY; else process.env.XAI_API_KEY = xaiKey;
   }
 });

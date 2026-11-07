@@ -106,55 +106,88 @@ test('OAuth validation rejects API keys and malformed grants', () => {
   assert.ok(oauthRecord(grant()));
   for (const value of [undefined, { kind: 'api-key', key: 'SECRET' }, { kind: 'grant', payload: { type: 'oauth', access: 'x' } }, { kind: 'grant', payload: { type: 'api_key', key: 'x' } }]) assert.equal(oauthRecord(value), undefined);
 });
-test('isolated routes have no API auth, ambient env, or Grok route', async () => {
+// small/spec — feature/grok-subscription; in-memory records replace shared credentials.
+test('all subscription routes reject API keys and ambient credential discovery', async () => {
   const f = fixture();
   const bindings = subscriptionBindings(f.credentials, catalog, keyFor);
-  assert.deepEqual([...bindings.profiles().keys()], ['subscription-openai-codex', 'subscription-kimi-coding']);
+  assert.deepEqual([...bindings.profiles().keys()], ['subscription-openai-codex', 'subscription-kimi-coding', 'subscription-xai']);
   for (const [route, profile] of bindings.profiles()) {
     assert.deepEqual(Object.keys(profile.piProvider.auth), ['oauth']);
     assert.equal(profile.piProvider.getModels()[0].provider, route);
     await assert.rejects(bindings.resolveApiKey(route), { code: 'MISSING_CREDENTIAL' });
+    const key = keyFor(route.slice('subscription-'.length));
+    f.records.set(key, { kind: 'api-key', key: 'PAID' });
+    assert.equal(await bindings.auth.credentials.read(route), undefined);
+    await assert.rejects(bindings.resolveApiKey(route), { code: 'MISSING_CREDENTIAL' });
+    f.records.set(key, grant());
+    assert.equal(await bindings.resolveApiKey(route), undefined);
   }
-  assert.equal(await bindings.auth.authContext.env('KIMI_API_KEY'), undefined);
+  for (const name of ['OPENAI_API_KEY', 'KIMI_API_KEY', 'XAI_API_KEY']) {
+    assert.equal(await bindings.auth.authContext.env(name), undefined);
+  }
   assert.equal(await bindings.auth.authContext.fileExists('/secret'), false);
-  f.records.set(keyFor('kimi-coding'), { kind: 'api-key', key: 'PAID' });
-  assert.equal(await bindings.auth.credentials.read('subscription-kimi-coding'), undefined);
-  await assert.rejects(bindings.resolveApiKey('subscription-kimi-coding'), { code: 'MISSING_CREDENTIAL' });
-  f.records.set(keyFor('kimi-coding'), grant());
-  assert.equal(await bindings.resolveApiKey('subscription-kimi-coding'), undefined);
 });
-test('refresh writes canonical grant and never resurrects logout', async () => {
+// small/regression — Grok reuses canonical OAuth refresh and logout protection.
+test('refresh writes canonical grants and never resurrects logout on any route', async () => {
   const f = fixture(), b = subscriptionBindings(f.credentials, catalog, keyFor);
-  f.records.set(keyFor('openai-codex'), grant());
-  await b.auth.credentials.modify('subscription-openai-codex', async current => ({ ...current, access: 'ROTATED' }));
-  assert.equal(f.records.get(keyFor('openai-codex')).payload.access, 'ROTATED');
-  f.records.clear();
-  let called = false;
-  assert.equal(await b.auth.credentials.modify('subscription-openai-codex', async () => { called = true; return grant().payload; }), undefined);
-  assert.equal(called, false);
-  assert.equal(f.records.size, 0);
+  for (const { id } of catalog) {
+    const route = `subscription-${id}`, key = keyFor(id);
+    f.records.set(key, grant());
+    await b.auth.credentials.modify(route, async current => ({ ...current, access: 'ROTATED' }));
+    assert.equal(f.records.get(key).payload.access, 'ROTATED');
+    await f.api.logout(id);
+    let called = false;
+    assert.equal(await b.auth.credentials.modify(route, async () => { called = true; return grant().payload; }), undefined);
+    assert.equal(called, false);
+    assert.deepEqual(f.records.get(key), { kind: 'grant', payload: { type: 'subscription-revoked' } });
+  }
 });
-test('status exposes presence and catalog, not token payloads or fake Grok support', async () => {
-  const f = fixture(); f.records.set(keyFor('openai-codex'), grant());
+// small/spec — feature/grok-subscription; the fake SDK catalog is not account discovery.
+test('status labels Grok models SDK-local without exposing OAuth secrets', async () => {
+  const f = fixture();
+  f.records.set(keyFor('openai-codex'), grant());
+  f.records.set(keyFor('xai'), grant());
   const state = await f.api.status();
   assert.equal(state.providers[0].configured, true);
   assert.equal(state.providers[1].configured, false);
-  assert.equal(state.providers[2].available, false);
-  assert.equal(state.providers[2].route, null);
+  const grok = state.providers.find(provider => provider.id === 'xai');
+  assert.equal(grok.available, true);
+  assert.equal(grok.configured, true);
+  assert.equal(grok.route, 'subscription-xai');
+  assert.equal(grok.modelCatalog.source, 'local');
+  assert.deepEqual(grok.models, [{ id: 'model-1', name: 'Model One' }]);
+  await assert.rejects(f.api.refreshModels('xai'), { code: 'MODEL_CATALOG_UNAVAILABLE' });
+  assert.equal(f.calls.length, 0);
   assert.doesNotMatch(JSON.stringify(state), /DO-NOT-EXPOSE|REFRESH-SECRET/);
-  assert.throws(() => f.api.login('xai'), { code: 'UNAVAILABLE' });
   assert.throws(() => f.api.login('__proto__'), { code: 'UNKNOWN_PROVIDER' });
 });
-test('login explicitly selects OAuth and captures human-only URL/code', async () => {
-  const f = fixture(async request => {
-    assert.equal(request.method, 'oauth'); assert.equal(request.key, keyFor('kimi-coding'));
-    request.interaction.notify({ message: 'Verify', url: 'https://auth.kimi.com/verify', code: '1234' });
-    f.records.set(request.key, grant());
-    return { status: 'authorized' };
-  });
-  f.api.login('kimi-coding'); await turn();
-  const p = (await f.api.status()).providers[1];
-  assert.equal(p.attempt.state, 'authorized'); assert.equal(p.attempt.notices[0].code, '1234');
+
+// small/spec — feature/grok-subscription; simulate an older SDK without xAI OAuth.
+test('Grok stays unavailable when the installed SDK has no OAuth handler', async () => {
+  const f = fixture();
+  const unsupported = catalog.map(provider => provider.id === 'xai' ? { ...provider, auth: { apiKey: provider.auth.apiKey } } : provider);
+  const api = createSubscriptions({ authorization: f.authorization, credentials: f.credentials, llm: {}, catalog: unsupported, keyFor });
+  try {
+    const grok = (await api.status()).providers.find(provider => provider.id === 'xai');
+    assert.equal(grok.available, false);
+    assert.deepEqual(grok.models, []);
+    assert.throws(() => api.login('xai'), { code: 'UNAVAILABLE' });
+    assert.equal(subscriptionBindings(f.credentials, unsupported, keyFor).profiles().has('subscription-xai'), false);
+  } finally { api.dispose(); }
+});
+// small/spec — feature/grok-subscription; synthetic authorization never contacts an issuer.
+test('login explicitly selects OAuth and captures human-only URL/code for every provider', async () => {
+  for (const { id } of catalog) {
+    const f = fixture(async request => {
+      assert.equal(request.method, 'oauth'); assert.equal(request.key, keyFor(id));
+      request.interaction.notify({ message: 'Verify', url: 'https://example.invalid/device', code: '1234' });
+      f.records.set(request.key, grant());
+      return { status: 'authorized' };
+    });
+    f.api.login(id); await turn();
+    const p = (await f.api.status()).providers.find(provider => provider.id === id);
+    assert.equal(p.attempt.state, 'authorized'); assert.equal(p.attempt.notices[0].code, '1234');
+  }
 });
 test('answers require current attempt and prompt; select validates choices', async () => {
   const f = fixture(async request => {
@@ -216,14 +249,17 @@ test('official OAuth failures retain actionable categories without exposing toke
   assert.equal(safeError(Object.assign(new Error('SECRET'), { code: 'NOT_COMMITTED' })).error, 'NOT_COMMITTED');
   assert.equal(safeError(Object.assign(new Error('SECRET'), { code: 'SECRET' })).error, 'REQUEST_FAILED');
 });
-test('test requires OAuth and exact catalog model; dispatch uses isolated route', async () => {
+// small/spec — feature/grok-subscription; all inference is a deterministic in-memory fake.
+test('test requires OAuth and exact SDK model before dispatching each isolated route', async () => {
   const f = fixture();
-  await assert.rejects(f.api.test('kimi-coding', 'model-1'), { code: 'MISSING_CREDENTIAL' });
-  f.records.set(keyFor('kimi-coding'), grant());
-  await assert.rejects(f.api.test('kimi-coding', 'guessed'), { code: 'UNKNOWN_MODEL' });
-  assert.deepEqual(await f.api.test('kimi-coding', 'model-1'), { ok: true, model: 'model-1', text: '2' });
-  assert.equal(f.calls[0].provider, 'subscription-kimi-coding');
-  assert.equal(f.calls[0].maxTokens, 256);
+  for (const { id } of catalog) {
+    await assert.rejects(f.api.test(id, 'model-1'), { code: 'MISSING_CREDENTIAL' });
+    f.records.set(keyFor(id), grant());
+    await assert.rejects(f.api.test(id, 'guessed'), { code: 'UNKNOWN_MODEL' });
+    assert.deepEqual(await f.api.test(id, 'model-1'), { ok: true, model: 'model-1', text: '2' });
+    assert.equal(f.calls.at(-1).provider, `subscription-${id}`);
+    assert.equal(f.calls.at(-1).maxTokens, 256);
+  }
 });
 test('logout atomically clears shared OAuth; blocks unrelated API key or external login', async () => {
   const f = fixture();
@@ -277,11 +313,11 @@ test('cancel never claims to remove a grant persisted by an upstream late commit
 });
 test('HTTP rejects cross-origin/missing header/unknown actions; status is no-store', async () => {
   const f = fixture(), handle = createHttpHandler(f.api), url = 'http://127.0.0.1:53381/api/subscriptions-lite';
-  const post = (headers, body = '{"action":"login","provider":"xai"}') => new Request(url, { method: 'POST', headers, body });
+  const post = (headers, body = '{"action":"login","provider":"unknown"}') => new Request(url, { method: 'POST', headers, body });
   assert.equal((await handle(post({ 'content-type': 'application/json' }))).status, 403);
   const headers = { 'content-type': 'application/json', 'x-subscriptions-lite': '1' };
   assert.equal((await handle(post({ ...headers, origin: 'https://evil.example' }))).status, 403);
-  assert.equal((await (await handle(post(headers))).json()).error, 'UNAVAILABLE');
+  assert.equal((await (await handle(post(headers))).json()).error, 'UNKNOWN_PROVIDER');
   assert.equal((await (await handle(post(headers, 'null'))).json()).error, 'INVALID_REQUEST');
   assert.equal((await (await handle(post(headers, '{"action":"execute"}'))).json()).error, 'INVALID_ACTION');
   assert.equal((await handle(new Request(url))).headers.get('cache-control'), 'no-store');
@@ -290,34 +326,35 @@ test('HTTP accepts authenticated Connection synthetic URLs using preserved Host'
   const handle = createHttpHandler(fixture().api);
   const post = origin => new Request('http://dsh.internal/api/subscriptions-lite', { method: 'POST',
     headers: { 'content-type': 'application/json', 'x-subscriptions-lite': '1', host: '127.0.0.1:53381', origin },
-    body: '{"action":"login","provider":"xai"}' });
+    body: '{"action":"login","provider":"unknown"}' });
   for (const origin of ['http://127.0.0.1:53381', 'https://127.0.0.1:53381']) {
     const reply = await handle(post(origin));
     assert.equal(reply.status, 400); // Reaches provider validation, not a false CSRF failure.
-    assert.equal((await reply.json()).error, 'UNAVAILABLE');
+    assert.equal((await reply.json()).error, 'UNKNOWN_PROVIDER');
   }
   for (const origin of ['null', 'https://evil.example', 'http://127.0.0.1:53381/path', 'http://user@127.0.0.1:53381']) {
     assert.equal((await handle(post(origin))).status, 403);
   }
 });
-test('native transport restores canonical model and history identities without mutating input', () => {
+// small/regression — Grok Responses also needs native identities for model and replayed history.
+test('native transports restore all canonical identities without mutating input', () => {
   const f = fixture();
   const seen = [];
-  const nativeCatalog = catalog.map(p => ({ ...p, stream: (...args) => seen.push(args), streamSimple: (...args) => seen.push(args) }));
+  const nativeCatalog = catalog.map(p => ({ ...p, stream: (...args) => seen.push([p.id, ...args]), streamSimple: (...args) => seen.push([p.id, ...args]) }));
   const b = subscriptionBindings(f.credentials, nativeCatalog, keyFor);
-  const provider = b.profiles().get('subscription-openai-codex').piProvider;
-  const model = provider.getModels()[0];
   const context = { messages: [{ role: 'user', content: 'test' },
-    { role: 'assistant', provider: 'subscription-openai-codex', content: [] },
-    { role: 'assistant', provider: 'subscription-kimi-coding', content: [] }] };
+    ...catalog.map(p => ({ role: 'assistant', provider: `subscription-${p.id}`, content: [] }))] };
   const options = {};
-  provider.streamSimple(model, context, options); provider.stream(model, context, options);
-  for (const [sentModel, sentContext, sentOptions] of seen) {
-    assert.equal(sentModel.provider, 'openai-codex');
-    assert.equal(sentContext.messages[1].provider, 'openai-codex');
-    assert.equal(sentContext.messages[2].provider, 'kimi-coding');
+  for (const [route, { piProvider: provider }] of b.profiles()) {
+    const model = provider.getModels()[0];
+    provider.streamSimple(model, context, options); provider.stream(model, context, options);
+    assert.equal(model.provider, route);
+  }
+  assert.equal(seen.length, 6);
+  for (const [id, sentModel, sentContext, sentOptions] of seen) {
+    assert.equal(sentModel.provider, id);
+    assert.deepEqual(sentContext.messages.slice(1).map(message => message.provider), catalog.map(p => p.id));
     assert.equal(sentOptions, options);
   }
-  assert.equal(model.provider, 'subscription-openai-codex');
-  assert.equal(context.messages[1].provider, 'subscription-openai-codex');
+  assert.deepEqual(context.messages.slice(1).map(message => message.provider), catalog.map(p => `subscription-${p.id}`));
 });

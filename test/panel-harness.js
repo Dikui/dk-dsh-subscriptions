@@ -5,7 +5,7 @@ import vm from 'node:vm';
 // Exercise the shipped Panel's event handlers and effects without a second
 // React installation. This is a deterministic hook harness, not a browser or
 // an assertion about browser popup policy / native shell behavior.
-export async function panelHarness({ fetch, open = () => null, clipboard, language = 'en', prompt, answer }) {
+export async function panelHarness({ fetch, open = () => null, clipboard, confirm = () => true, language = 'en', prompt, answer }) {
   let declaration, Panel, Prompt, cursor = 0, pendingRender = false, effects = [], tree;
   const cells = [], cleanups = [], timers = new Map(), dictionaries = new Map();
   let timerId = 0;
@@ -35,7 +35,7 @@ export async function panelHarness({ fetch, open = () => null, clipboard, langua
     URL, AbortController, fetch, navigator: { clipboard }, __capturePrompt(component) { Prompt = component; },
     setTimeout(callback) { const id = ++timerId; timers.set(id, callback); return id; },
     clearTimeout(id) { timers.delete(id); },
-    window: { __ModuleLoader__: { load(value) { declaration = value; } }, open, confirm: () => true },
+    window: { __ModuleLoader__: { load(value) { declaration = value; } }, open, confirm },
   };
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
   const marker = '        function Panel({ close }) {';
@@ -89,10 +89,10 @@ export async function panelHarness({ fetch, open = () => null, clipboard, langua
   };
 }
 
-export function initialStatus(attempt = null) {
+export function initialStatus(attempt = null, provider = 'kimi-coding') {
   return { providers: [
     { id: 'openai-codex', name: 'OpenAI · ChatGPT', route: 'subscription-openai-codex', available: true, configured: false, credentialKind: null, models: [], modelCatalog: { source: 'account', state: 'unloaded', error: null, updatedAt: null }, attempt: null },
-    { id: 'kimi-coding', name: 'Kimi Code', route: 'subscription-kimi-coding', available: true, configured: false, credentialKind: null, models: [{ id: 'kimi-test', name: 'Kimi Test' }], modelCatalog: { source: 'local', state: 'ready', error: null, updatedAt: null }, attempt },
-    { id: 'xai', name: 'Grok', route: null, available: false, configured: false, credentialKind: null, models: [], modelCatalog: { source: 'none', state: 'unavailable', error: null, updatedAt: null }, attempt: null },
+    { id: 'kimi-coding', name: 'Kimi Code', route: 'subscription-kimi-coding', available: true, configured: false, credentialKind: null, models: [{ id: 'kimi-test', name: 'Kimi Test' }], modelCatalog: { source: 'local', state: 'ready', error: null, updatedAt: null }, attempt: provider === 'kimi-coding' ? attempt : null },
+    { id: 'xai', name: 'Grok', route: 'subscription-xai', available: true, configured: false, credentialKind: null, models: [{ id: 'grok-test', name: 'Grok Test' }], modelCatalog: { source: 'local', state: 'ready', error: null, updatedAt: null }, attempt: provider === 'xai' ? attempt : null },
   ] };
 }

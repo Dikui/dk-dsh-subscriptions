@@ -12,7 +12,7 @@ window.__ModuleLoader__.load({
         running: 'Waiting for authorization', authorized: 'Authorization finished', cancelled: 'Stopped waiting. A pending credential save may still finish; remove it if it appears.', failed: 'Authorization failed',
         openai: 'Uses the official subscription credential to fetch your account’s selectable OpenAI models. The SDK’s static model list is not used as account availability.',
         kimi: 'Kimi Coding membership only. Kimi web, finance, and game services are not included.',
-        xai: 'Direct Grok OAuth authorization in DSH is not confirmed. Connecting is disabled.',
+        xai: 'Uses the official SDK’s Grok OAuth flow; DSH authorization scope is not independently confirmed. Check billing limits before use: subscription-only billing is not guaranteed and extra charges may apply.',
         grokNews: 'Grok and OpenCode', grokDocs: 'Official headless scripting docs',
         model: 'Local model catalog', noModels: 'No local models available', catalog: 'This is the installed SDK’s local catalog, not an account-discovered availability list. It does not prove access or remaining quota.',
         accountModels: 'Account model list', accountNoModels: 'No selectable account models loaded', accountCatalog: 'Returned by the account model endpoint, not a static SDK list. This is not a remaining-quota or request-success guarantee.',
@@ -57,7 +57,7 @@ window.__ModuleLoader__.load({
         running: '等待授权', authorized: '授权已完成', cancelled: '已停止等待。进行中的凭证保存可能仍会完成；如出现凭证，请移除。', failed: '授权失败',
         openai: '使用官方订阅凭证获取当前账号可选择的 OpenAI 模型，不再把 SDK 静态目录当作账号可用列表。',
         kimi: '仅支持 Kimi Coding 会员，不包含 Kimi 网页、金融或游戏服务。',
-        xai: '尚未确认 DSH 能直接进行 Grok OAuth 授权，因此暂不支持连接。',
+        xai: '复用官方 SDK 的 Grok OAuth 流程，DSH 客户端的授权适用范围尚未独立确认。使用前请核对账号计费限制：无法保证仅消耗订阅额度，可能产生额外收费。',
         grokNews: 'Grok 与 OpenCode', grokDocs: '官方无头脚本文档',
         model: '本地模型目录', noModels: '暂无本地模型', catalog: '这是已安装 SDK 的本地目录，不是账号接口返回的可用列表；不代表访问权限或剩余额度。',
         accountModels: '账号模型列表', accountNoModels: '尚未加载可选择的账号模型', accountCatalog: '来自账号模型接口，不是 SDK 静态目录；不代表剩余额度，也不保证每次调用成功。',
@@ -108,7 +108,8 @@ window.__ModuleLoader__.load({
     };
     const providerNotes = { 'openai-codex': 'openai', 'kimi-coding': 'kimi', xai: 'xai' };
     // Kimi's device-code API and browser verification page use different hosts.
-    const authHosts = { 'openai-codex': ['auth.openai.com'], 'kimi-coding': ['auth.kimi.com', 'www.kimi.com'] };
+    // xAI's official CLI pins accounts.x.ai as its accounts/consent origin; unknown device hosts fail closed.
+    const authHosts = { 'openai-codex': ['auth.openai.com'], 'kimi-coding': ['auth.kimi.com', 'www.kimi.com'], xai: ['accounts.x.ai'] };
     function trustedLink(value, provider) {
       try {
         const url = new URL(value);
@@ -403,7 +404,8 @@ window.__ModuleLoader__.load({
                     h('select', { value: model, disabled: disabled || isRunning || !provider.models.length, onChange: event => setModels(previous => ({ ...previous, [provider.id]: event.target.value })) },
                       !provider.models.length && h('option', { value: '' }, t(accountCatalog ? 'accountNoModels' : 'noModels')), provider.models.map(item => h('option', { key: item.id, value: item.id }, item.name)))),
                   h('button', { type: 'button', disabled: disabled || isRunning || !provider.configured || !model, onClick: () => {
-                    if (window.confirm(`${t('testConfirm')}\n${model}`)) run(provider.id, 'test', { model });
+                    const warning = provider.id === 'xai' ? `\n${t('xai')}` : '';
+                    if (window.confirm(`${t('testConfirm')}\n${model}${warning}`)) run(provider.id, 'test', { model });
                   } }, t(busy[provider.id] === 'test' ? 'testing' : 'test'))),
                   h('p', { className: 'sl-muted' }, t(accountCatalog ? 'accountCatalog' : 'catalog'))),
                 attempt && h('div', { className: 'sl-flow' },

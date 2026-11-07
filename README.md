@@ -8,18 +8,18 @@
 | --- | --- | --- |
 | OpenAI | ChatGPT / Codex OAuth，读取账号返回的模型列表 | `subscription-openai-codex` |
 | Kimi | Kimi Code 订阅，模型目录仍来自本地 SDK，非通用网页会员接口 | `subscription-kimi-coding` |
-| Grok | 展示限制与官方指引，暂不开放 DSH 直连 | 无 |
+| Grok | 复用官方 SDK 的 xAI OAuth，模型目录来自本地 SDK | `subscription-xai` |
 
-代码接入不代表账户权益已验证。OpenAI 列表只包含账号接口标为可显示、且未标为禁止 API 使用的模型；它不是剩余额度或每次推理成功的保证。Kimi 的本地目录也不代表账号权限已验证。本项目不承诺官方背书，不提供虚构的余额或配额数据，不包含金融、游戏、网页搜索等产品工具。
+代码接入不代表账户权益已验证。OpenAI 列表只包含账号接口标为可显示、且未标为禁止 API 使用的模型；它不是剩余额度或每次推理成功的保证。Kimi 和 Grok 的本地目录也不代表账号权限已验证。本项目不承诺官方背书，不提供虚构的余额或配额数据，不包含金融、游戏、网页搜索等产品工具。
 
-Grok 的官方订阅支持目前明确覆盖 [OpenCode](https://x.ai/news/grok-opencode) 以及 [Grok Build/ACP](https://docs.x.ai/build/cli/headless-scripting)。尚未核实 DSH 自身的 OAuth 客户端授权及禁止 API 付费回退的契约，因此不借用 OpenCode/Grok CLI 身份开放直连。ACP 外部编码代理也不是 DSH 主模型协议的等价替代。
+Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses 传输，不另写 OAuth 或安装 CLI。xAI 已公开支持 [OpenCode](https://x.ai/news/grok-opencode) 及 [Grok Build/ACP](https://docs.x.ai/build/cli/headless-scripting)，但这不等于 DSH 客户端的授权适用范围已获确认。**不回退 API key 只能限制客户端认证方式，不能保证服务端不使用预付 credits 或产生额外收费。** 使用前应核对账号计费限制；面板测试会再次提示，真实授权及计费仍需用户另行验证。
 
 ## 使用
 
 1. 在 DSH 安装本目录作为本地 bundle（由 `plugin_manager install_bundle` 完成，勿直接改 profile）。
-2. 打开 **设置 → dsh-dk-subscriptions**，选择 OpenAI 或 Kimi 登录。
+2. 打开 **设置 → dsh-dk-subscriptions**，选择 OpenAI、Kimi 或 Grok 登录。Grok 需要当前官方 SDK 提供 xAI OAuth；旧 SDK 不支持时保持不可用。
 3. 点击连接会先打开等待页，取得官方授权链接后跳转。若弹窗受限，可直接点击面板里的 **打开官方授权页面**，或 **复制授权链接** 到浏览器，再使用显示的授权码。由用户确认账户和授权；插件及代理工具不代填账号密码、不代点授权同意。
-4. OpenAI 授权后自动加载账号模型；也可点击 **刷新账号模型 · 不消耗推理额度**，只查询元数据。另行点击模型测试才会发送很短的编码问题，**消耗订阅额度**。
+4. OpenAI 授权后自动加载账号模型；也可点击 **刷新账号模型 · 不消耗推理额度**，只查询元数据。Kimi / Grok 显示本地 SDK 目录，不探测账号权益。另行点击模型测试并确认后才会发送很短的编码问题，**消耗额度；Grok 还可能额外收费**。
 5. 主会话的模型选择器使用上表的独立路由。已有其他插件的路由保持不变。
 
 兼容性暂固定为 **DSH 0.2.1-rc.5**：虽然 `PiAiAdapter` 是包导出，其构造 profile 的结构仍可能变化。升级 DSH 前应重新验证，不要绕过版本限制。
@@ -27,7 +27,7 @@ Grok 的官方订阅支持目前明确覆盖 [OpenCode](https://x.ai/news/grok-o
 ## 账号模型列表
 
 - 发现流程是通用的：[models.js](<models.js>) 统一校验模型描述、缓存、并发、超时、取消、账号隔离和失败状态；[model-sources.js](<model-sources.js>) 的注册表只保留厂商查询与字段映射。一个 source 提供 `readIdentity(signal)` 和 `loadModels({ identity, signal })`，返回规范化的原生模型描述，接入后设置页、主路由、测试与退出流程无需再按厂商分支。
-- 当前只有 OpenAI 注册了已核实的账号模型 source。Kimi 的账号查询尚未接入，仍明确显示本地 SDK 目录；对未注册厂商执行账号刷新会返回 `MODEL_CATALOG_UNAVAILABLE`，不会猜测通用 `/models` 地址或冒充真实账号列表。两家厂商的通用流程由合成 source 回归验证，不代表已验证 Kimi 的真实接口。
+- 当前只有 OpenAI 注册了已核实的账号模型 source。Kimi / Grok 的账号查询尚未接入，仍明确显示本地 SDK 目录；对未注册厂商执行账号刷新会返回 `MODEL_CATALOG_UNAVAILABLE`，不会猜测通用 `/models` 地址或冒充真实账号列表。通用流程中的第二个 source 仅为测试合成数据，不代表已验证 Kimi 或 Grok 的真实账号模型接口。
 - OpenAI 查询 `https://chatgpt.com/backend-api/codex/models`，使用官方服务刷新后的共享 OAuth 凭证及账号标识；客户端版本取自已安装的 pi-ai。不会安装 CLI、复制登录流程或通过逐个推理探测模型权限。
 - 设置页、主会话的 `subscription-openai-codex` 路由和测试校验共用同一列表。允许账号接口返回 SDK 未收录的新模型 ID，不与静态名称合并。SDK 只提供必要的传输描述模板，不提供列表名称。
 - 元数据只在内存中缓存 60 秒；显式刷新跳过缓存。并发调用共享最长 10 秒的查询，单个调用方取消不会使其他调用失败。退出或账号变化会清空列表。已准备的主会话调用保留原模型描述，避免刷新后上下文/推理参数与之前校验的元数据不一致。
@@ -36,17 +36,18 @@ Grok 的官方订阅支持目前明确覆盖 [OpenCode](https://x.ai/news/grok-o
 
 ## 连接时没有授权页面
 
-- **正在获取链接**：Kimi 先请求设备授权数据，成功后才产生链接和授权码。当前内置适配器的单次 HTTP 请求限时为 30 秒；这不等于整个登录的期限。界面会显示等待提示，超时或请求失败后可以重新连接。
+- **正在获取链接**：Kimi / Grok 先请求设备授权数据，成功后才产生链接和授权码。当前内置适配器的单次 HTTP 请求限时为 30 秒；这不等于整个登录的期限。界面会显示等待提示，超时或请求失败后可以重新连接。
 - **浏览器拦截弹窗**：使用面板里一直保留的官方链接及复制按钮；剪贴板不可用时，链接和授权码仍能选中后手动复制。不会为此切换成 API-key 计费。
 - **重新打开面板**：同一 DSH 进程里仍在运行的授权会继续显示链接、授权码和取消按钮，不再因丢失前端的发起标记而隐藏。整个 DSH 进程重启后需重新连接。
 - **链接不是受信任域名**：面板会明确拒绝打开，而不是静默跳到其他网站；不会自动放宽域名限制。Kimi 的设备授权 API 在 `auth.kimi.com`，实际返回的浏览器验证页在 `www.kimi.com`，两个精确域名均受支持；不放行任意子域名、HTTP 或异常端口。
+- **Grok 的域名边界**：只允许官方源码确认的账号/授权页面来源 `accounts.x.ai`；不因 OAuth API 在 `auth.x.ai` 就把它当作浏览器验证页，也不放行 `*.x.ai`。实际设备码响应的域名尚未观察，若返回其他域名则拒绝打开和复制，不自动扩大白名单。[域名证据与验证缺口](<docs/research/grok-browser-verification.md>)。
 - 等待页如果被用户导航到别的网站，插件不再跳转或关闭该页。授权页打开后也不会被组件卸载自动关闭。
 
 ## 网页已登录，但 DSH 仍显示授权失败
 
 浏览器登录之后，**DSH 后台**还要向 OpenAI 交换令牌。浏览器能访问不代表后台使用相同网络。
 
-- **自动代理（macOS）**：插件加载时读取系统已启用的手动 HTTPS 代理，自动获取地址和端口，不启动代理服务、不写入代理配置或进程环境。安装带异步作用域的连接 dispatcher：仅本插件的 OpenAI/Kimi 授权、令牌刷新、账号模型查询及模型请求走系统代理，其余请求委托安装前的 dispatcher。不会替换全局 `fetch`，避免 billion-context 等插件的 fetch 链重定向跳过代理；卸载时仅在仍拥有 dispatcher 时恢复。Codex 在自动代理启用时使用官方 SSE 传输，避免 WebSocket 绕过代理。
+- **自动代理（macOS）**：插件加载时读取系统已启用的手动 HTTPS 代理，自动获取地址和端口，不启动代理服务、不写入代理配置或进程环境。安装带异步作用域的连接 dispatcher：仅本插件的 OpenAI/Kimi/Grok 授权、令牌刷新、已注册的账号模型查询及模型请求走系统代理，其余请求委托安装前的 dispatcher。不会替换全局 `fetch`，避免 billion-context 等插件的 fetch 链重定向跳过代理；卸载时仅在仍拥有 dispatcher 时恢复。Codex 在自动代理启用时使用官方 SSE 传输，避免 WebSocket 绕过代理。
 - **显式设置优先**：存在任一非空的 `HTTPS_PROXY`、`HTTP_PROXY`、`ALL_PROXY`（含小写形式）时，完全沿用 DSH 既有路由，不自动回退系统代理。自动模式也遵循 `no_proxy` / `NO_PROXY`、系统的域名排除列表和简单主机名排除设置；回环请求直连。不重试直连来掩盖代理失败。
 - **范围限制**：只自动识别手动 HTTPS 代理，不解析 PAC、自动发现或 SOCKS，也不扩展系统排除列表中的 CIDR 规则。需要这些规则时请显式配置受 DSH 支持的代理及排除项。其他系统不进行自动发现。
 - **生效时间**：完全退出并重启 DSH 后加载；之后修改系统代理地址或端口，也需要重启以重新读取。再发起一次新授权，不重复提交已失败的授权码。
@@ -57,7 +58,7 @@ Grok 的官方订阅支持目前明确覆盖 [OpenCode](https://x.ai/news/grok-o
 ## 安全边界
 
 - 只接受官方 `llm-pi-ai/<provider>` 下 `kind: grant`、`type: oauth` 的凭证；UI 和工具不返回 access/refresh token。
-- 新路由移除了 API-key 认证 handler，并禁用环境/本地文件凭证发现。没有 OAuth 就失败，**不会退到 API key 或其他厂商**。该保证只覆盖本插件的两个路由，不改变其他已安装插件。
+- 新路由移除了 API-key 认证 handler，并禁用环境/本地文件凭证发现。没有 OAuth 就失败，**不会退到 API key 或其他厂商**。该保证只覆盖本插件的三个路由，不改变其他已安装插件。
 - 复用官方凭证及刷新锁。退出在同一写锁中清除共享 OAuth 的密钥，留下不含密钥的 `subscription-revoked` 标记，**也会使官方 pi-ai 对应路由退出**。该版本存储接口没有条件删除能力，保留标记可避免误删并发写入的 API key，并阻止原路由发现环境密钥。重新登录会替换标记。退出不会取消订阅，不代表远程令牌撤销，也不保证终止已发送请求或另一入口后来发起的登录。
 - 登录和回答授权提示仅在设置界面提供。`subscription_accounts` 工具提供状态、账号模型刷新、短测试、退出；不会返回授权验证码、链接、账号标识或令牌。
 - HTTP 接口由 DSH Connection 认证保护；POST 额外校验同源、JSON 和专用请求头。授权尝试有 15 分钟期限，界面退出时尽力取消自己发起的尝试。
@@ -81,6 +82,6 @@ npm pack --dry-run
 
 原生 `fetch` 的 dispatcher 协议随 Node 版本变化；代理回归检查应使用 **DSH 实际启动的 Node 运行时**，而不只使用终端的 `node`。将 `DSH_TEST_UNDICI` 指向 DSH 配套的 Undici 目录后，运行 `--test test/network-runtime.test.js`。该检查使用 MockAgent，禁用真实网络，覆盖桌面 Node 24 协议兼容和全局 fetch 防递归补丁跳回原始 fetch 的场景；依赖不可用时默认跳过，不把跳过算作通过。
 
-同样设置 `DSH_TEST_UNDICI` 后运行 `--test test/catalog-runtime.test.js`，可检查真实官方适配器的账号模型列表、主路由解析和 prepared-call 元数据冻结。该测试通过公开的插件加载入口注册适配器，元数据由 MockAgent 返回，凭证仅存在于内存，推理传输用立即停止的替身，不查询真实账户、不消耗推理额度。
+同样设置 `DSH_TEST_UNDICI` 后运行 `--test test/catalog-runtime.test.js`，可检查真实官方适配器的账号模型列表、主路由解析和 prepared-call 元数据冻结；这部分元数据检查的推理传输用立即停止的替身。Grok 部分则通过 MockAgent 验证原生 OAuth 刷新、Responses SSE 和短测试：缺失 OAuth 或存有 API key 时，即使存在环境/调用方密钥也不发送请求；401/403/429 只返回脱敏失败，不重试或付费回退。检查通过公开插件入口注册适配器，凭证仅存在于内存，所有 HTTP 均被模拟且禁止外连，不查询真实账户、不消耗推理额度。
 
 单元测试使用内存凭证，不能替代真实厂商授权验证。安装后需要在实际 DSH 设置页确认显示、完成用户授权、测试一个模型，然后按需退出验证。未授权时不应报告“订阅已验证”。
