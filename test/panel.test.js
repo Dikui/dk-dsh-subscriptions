@@ -34,6 +34,114 @@ function flowServer(provider = 'kimi-coding') {
   };
 }
 
+// small/regression — user requested separate title-only subpages; status/HTTP are synthetic and billing stays available in collapsed details.
+test('model connections and data tools occupy separate bilingual subpages', async () => {
+  for (const language of ['en', 'zh']) {
+    for (const enabled of [undefined, false, true]) {
+      const state = initialStatus(); let requests = 0;
+      if (enabled !== undefined) state.vendorTools = { kimiDatasource: { enabled } };
+      const panel = await panelHarness({ language, fetch: async (path, options) => {
+        assert.equal(path, '/api/subscriptions-lite'); assert.equal(options.method, 'GET'); requests++;
+        return Response.json(state); // Navigation must never issue a Datasource or inference request.
+      } });
+      try {
+        const labels = language === 'en' ? ['Model connections', 'Data tools'] : ['模型接入', '数据工具'];
+        const toolTitle = language === 'en' ? 'Kimi data tools' : 'Kimi 数据工具';
+        for (const label of [labels[0], labels[1], labels[0], labels[1]]) {
+          await panel.click(label, null);
+          const navigation = panel.nodes().find(node => node.type === 'nav');
+          const buttons = panel.nodes(navigation).filter(node => node.type === 'button');
+          assert.equal(buttons.length, 2);
+          assert.equal(buttons.filter(node => node.props['aria-current'] === 'page').length, 1);
+          assert.equal(panel.text(buttons.find(node => node.props['aria-current'] === 'page')), label);
+          assert.ok(buttons.every(node => node.props.type === 'button')); // Native keyboard activation, no custom tab key handling.
+          const page = panel.nodes().find(node => node.props.id === buttons[0].props['aria-controls']);
+          assert.equal(page.props['aria-label'], label);
+          const cards = panel.nodes(page).filter(node => node.type === 'article').map(node => node.props['aria-label']);
+          assert.deepEqual(cards, label === labels[0] ? ['OpenAI · ChatGPT', 'Kimi Code', 'Grok'] : [toolTitle]);
+          for (const card of panel.nodes(page).filter(node => node.type === 'article')) {
+            const details = panel.nodes(card).filter(node => node.type === 'details');
+            const folded = new Set(details.flatMap(node => panel.nodes(node)));
+            assert.ok(details.every(node => !node.props.open));
+            assert.ok(panel.nodes(card).filter(node => node.type === 'p' && !folded.has(node))
+              .every(node => node.props.role === 'status'), 'default view contains statuses, not description paragraphs');
+          }
+        }
+        const card = panel.within(toolTitle)[0], text = panel.text(card);
+        assert.match(text, /ExtraUsage/);
+        assert.match(text, enabled === undefined ? /Status unknown|状态未知/ : enabled ? /Enabled|已启用/ : /Disabled|已关闭/);
+        assert.doesNotMatch(text, /GDP|kimi_get_data_source_desc|kimi_call_data_source_tool|config\.kimiDatasource/);
+        assert.equal(panel.nodes(card).some(node => node.type === 'blockquote'), false);
+        const details = panel.nodes(card).find(node => node.type === 'details');
+        assert.ok(details); assert.ok(!details.props.open);
+        assert.equal(panel.text(panel.nodes(details).find(node => node.type === 'summary')), language === 'en' ? 'Billing' : '费用说明');
+        assert.match(panel.text(details), /ExtraUsage/);
+        assert.equal(panel.nodes(card).some(node => node.type === 'select'), false);
+        assert.equal(requests, 1, 'switching subpages does not reload the account or call paid tools');
+      } finally { panel.dispose(); }
+    }
+  }
+});
+
+// small/spec — tool access shares Kimi OAuth; the connection shortcut only navigates, never starts OAuth.
+test('Kimi tool credential guidance follows the shared OAuth status', async () => {
+  for (const configured of [false, true]) {
+    const state = initialStatus();
+    state.vendorTools = { kimiDatasource: { enabled: true } };
+    const kimi = state.providers.find(provider => provider.id === 'kimi-coding');
+    kimi.configured = configured; kimi.credentialKind = configured ? 'grant' : null;
+    const panel = await panelHarness({ fetch: async (_path, options) => {
+      assert.equal(options.method, 'GET'); return Response.json(state);
+    } });
+    try {
+      let focused = 0;
+      panel.button('Model connections', null).props.ref.current = { focus() { focused++; } }; // Native focus target, not another authorization service.
+      await panel.click('Data tools', null);
+      const card = panel.within('Kimi data tools')[0];
+      const status = panel.nodes(card).find(node => node.type === 'p' && node.props.role === 'status');
+      assert.equal(panel.text(status), configured ? 'Connected' : 'Not connected');
+      assert.equal(panel.nodes(card).some(node => node.type === 'button'), !configured);
+      if (!configured) {
+        await panel.click('Go to connections', 'Kimi data tools');
+        assert.ok(panel.within('Kimi Code'));
+        assert.equal(focused, 1);
+      }
+    } finally { panel.dispose(); }
+  }
+});
+
+// small/regression — internal navigation must not unmount the owner of a pending OAuth flow.
+test('switching subpages preserves a running authorization', async () => {
+  const server = flowServer(), destinations = [];
+  const panel = await panelHarness({ fetch: server.fetch, open: () => makePopup(value => destinations.push(value)) });
+  try {
+    await panel.click('Connect');
+    await panel.click('Data tools', null);
+    server.setNotices(); await panel.poll();
+    assert.deepEqual(destinations, [url]);
+    assert.equal(server.events.filter(event => event === 'login').length, 1);
+    assert.equal(server.events.includes('cancel'), false);
+    await panel.click('Model connections', null);
+    assert.ok(panel.within('Kimi Code').some(node => node.type === 'a' && node.props.href === url));
+    await panel.click('Cancel authorization');
+    assert.equal(server.events.filter(event => event === 'cancel').length, 1);
+  } finally { panel.dispose(); }
+});
+
+// small/spec — the two-subpage settings request must preserve the model chosen before navigation.
+test('switching subpages preserves the selected model', async () => {
+  const state = initialStatus();
+  state.providers[1].models.push({ id: 'kimi-second', name: 'Second synthetic model' });
+  const panel = await panelHarness({ fetch: async () => Response.json(state) });
+  try {
+    panel.within('Kimi Code').find(node => node.type === 'select').props.onChange({ target: { value: 'kimi-second' } });
+    await panel.flush();
+    await panel.click('Data tools', null);
+    await panel.click('Model connections', null);
+    assert.equal(panel.within('Kimi Code').find(node => node.type === 'select').props.value, 'kimi-second');
+  } finally { panel.dispose(); }
+});
+
 test('Connect reserves a tab before the async request, then opens the trusted Kimi device URL', async () => {
   const server = flowServer();
   const destinations = [];
@@ -243,7 +351,9 @@ test('Grok warns about extra charges in both languages and tests only after conf
     try {
       const label = language === 'en' ? 'Test selected model · uses quota' : '测试所选模型 · 消耗额度';
       const warning = language === 'en' ? /extra charges/ : /额外收费/;
-      assert.match(panel.text(), warning);
+      const billing = panel.within('Grok').find(node => node.type === 'details');
+      assert.ok(billing && !billing.props.open);
+      assert.match(panel.text(billing), warning);
       assert.equal(panel.within('Grok').some(node => node.type === 'button' && /Refresh account models|刷新账号模型/.test(node.props.children.join(''))), false);
       await panel.click(label, 'Grok');
       assert.match(confirmations[0], warning);

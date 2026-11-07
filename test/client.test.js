@@ -24,17 +24,24 @@ function loadClient() {
 }
 test('client module registers only its settings slot and disposes translations', () => {
   const { declaration, plugin } = loadClient();
-  assert.equal(declaration.id, 'dsh-dk-subscriptions');
+  assert.equal(declaration.id, 'dk-subscriptions');
   const dictionaries = new Map(), cleanup = [];
   let slot;
   plugin.apply({
     effect(fn) { cleanup.push(fn()); },
-    locale: { register(ns, language, values) { assert.equal(ns, 'dsh-dk-subscriptions'); dictionaries.set(language, values); return () => dictionaries.delete(language); },
+    locale: { register(ns, language, values) { assert.equal(ns, 'dk-subscriptions'); dictionaries.set(language, values); return () => dictionaries.delete(language); },
       bind() { return key => dictionaries.get('en')[key]; }, subscribe() {}, getSnapshot() {} },
     slots: { inject(name, fn) { assert.equal(name, 'settings.section'); fn(); }, register(options, component) { slot = options; assert.equal(typeof component, 'function'); } },
   });
-  assert.equal(slot.id, 'subscriptions-lite'); assert.equal(slot.label(), 'dsh-dk-subscriptions');
+  assert.equal(slot.id, 'subscriptions-lite'); assert.equal(slot.label(), 'dk-subscriptions');
   assert.equal(dictionaries.size, 2); cleanup.forEach(fn => fn()); assert.equal(dictionaries.size, 0);
+});
+test('package, bundle and host use the client module name', () => {
+  const { declaration } = loadClient();
+  const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(pkg.name, declaration.id);
+  assert.ok(readFileSync(new URL('../cordis.patch.yml', import.meta.url), 'utf8').includes(`name: '${pkg.name}'`));
+  assert.ok(readFileSync(new URL('../index.js', import.meta.url), 'utf8').includes(`export const name = '${pkg.name}';`));
 });
 test('authorization links enforce exact HTTPS vendor hosts', () => {
   const { helpers: h } = loadClient();
@@ -58,7 +65,7 @@ test('locale dictionaries and packaged metadata are bilingual', () => {
   assert.deepEqual(Object.keys(h.messages.en).sort(), Object.keys(h.messages.zh).sort());
   for (const language of ['en', 'zh']) {
     const data = JSON.parse(readFileSync(new URL(`../locale/${language}.json`, import.meta.url), 'utf8'));
-    assert.equal(data.meta.title, 'dsh-dk-subscriptions'); assert.ok(data.meta.description);
+    assert.equal(data.meta.title, 'dk-subscriptions'); assert.ok(data.meta.description);
   }
 });
 test('selection prompts use the installed authorization contract option.id, not option.value', () => {
@@ -73,6 +80,16 @@ test('selection prompts use the installed authorization contract option.id, not 
 test('client validates malformed endpoint data', () => {
   const { helpers: h } = loadClient();
   for (const data of [null, {}, { providers: [] }, { providers: [{ id: '__proto__' }] }]) assert.ok(!h.validStatus(data));
+  const state = initialStatus();
+  assert.ok(h.validStatus(state)); // A legacy backend has no tool metadata: display unknown, not enabled.
+  for (const enabled of [false, true]) {
+    state.vendorTools = { kimiDatasource: { enabled } };
+    assert.ok(h.validStatus(state));
+  }
+  for (const vendorTools of [null, [], {}, { kimiDatasource: null }, { kimiDatasource: { enabled: 'true' } }]) {
+    state.vendorTools = vendorTools;
+    assert.equal(h.validStatus(state), false);
+  }
 });
 
 test('OpenAI status rejects a local baseline or stale names after discovery failure', () => {

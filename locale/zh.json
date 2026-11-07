@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "dsh-dk-subscriptions",
+    "title": "dk-subscriptions",
     "description": "复用官方 SDK 的 OAuth 连接 OpenAI Codex、Kimi Coding 与 Grok，管理共用凭证，并手动测试模型。Grok 账号权益与仅用订阅计费尚未验证。"
   }
 }

@@ -1,21 +1,23 @@
 window.__ModuleLoader__.load({
-  id: 'dsh-dk-subscriptions',
+  id: 'dk-subscriptions',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
-    const namespace = 'dsh-dk-subscriptions';
+    const namespace = 'dk-subscriptions';
     const messages = {
       en: {
-        title: 'dsh-dk-subscriptions', description: 'Connect an existing coding subscription through the official authorization flow.',
+        title: 'dk-subscriptions', navigation: 'Subscription pages', modelsPage: 'Model connections', toolsPage: 'Data tools',
         close: 'Close', loading: 'Loading subscriptions…', retry: 'Retry', connect: 'Connect', reconnect: 'Reconnect', cancel: 'Cancel authorization', logout: 'Remove credential',
         saved: 'Credential saved · entitlement not verified', missing: 'No subscription credential saved', apiKey: 'An API key exists; it is not a subscription credential.', unavailable: 'Unavailable',
         running: 'Waiting for authorization', authorized: 'Authorization finished', cancelled: 'Stopped waiting. A pending credential save may still finish; remove it if it appears.', failed: 'Authorization failed',
-        openai: 'Uses the official subscription credential to fetch your account’s selectable OpenAI models. The SDK’s static model list is not used as account availability.',
-        kimi: 'Kimi Coding membership only. Kimi web, finance, and game services are not included.',
+        toolsTitle: 'Kimi data tools',
+        toolsEnabled: 'Enabled', toolsDisabled: 'Disabled', toolsUnknown: 'Status unknown',
+        toolsSharedCredential: 'Connected', toolsNeedsCredential: 'Not connected', toolsConnect: 'Go to connections',
+        billing: 'Billing', toolsCost: 'Requests may use Kimi quota or ExtraUsage balance.',
         xai: 'Uses the official SDK’s Grok OAuth flow; DSH authorization scope is not independently confirmed. Check billing limits before use: subscription-only billing is not guaranteed and extra charges may apply.',
         grokNews: 'Grok and OpenCode', grokDocs: 'Official headless scripting docs',
-        model: 'Local model catalog', noModels: 'No local models available', catalog: 'This is the installed SDK’s local catalog, not an account-discovered availability list. It does not prove access or remaining quota.',
-        accountModels: 'Account model list', accountNoModels: 'No selectable account models loaded', accountCatalog: 'Returned by the account model endpoint, not a static SDK list. This is not a remaining-quota or request-success guarantee.',
+        model: 'Local model catalog', noModels: 'No local models available',
+        accountModels: 'Account model list', accountNoModels: 'No selectable account models loaded',
         refreshModels: 'Refresh account models · no inference quota', refreshingModels: 'Refreshing account models…',
         catalogError: 'Could not fetch the account model list. Check the backend network, then refresh. No static model names were substituted.',
         catalogDenied: 'The account model endpoint rejected this credential or connection (HTTP 401/403). Check authorization and the backend network, then refresh.',
@@ -28,7 +30,7 @@ window.__ModuleLoader__.load({
         logoutConfirm: 'Clear the shared OAuth secrets, leaving a secret-free signed-out marker? Other DSH features using this same credential will also lose access.',
         authorize: 'Open official authorization', code: 'Authorization code', submit: 'Submit answer', choose: 'Choose an option',
         preparing: 'Preparing the authorization link. Keep this panel open. If no link appears after about 30 seconds, cancel, check your network, and retry.',
-        preparingTab: 'Preparing authorization. Return to dsh-dk-subscriptions for progress or to cancel.',
+        preparingTab: 'Preparing authorization. Return to dk-subscriptions for progress or to cancel.',
         opened: 'The authorization page was opened in a new tab. You can also use the link below.',
         popupBlocked: 'Popup blocked or closed. Open the official link below, or copy it into your browser.',
         authorizationLink: 'Official authorization link', copyLink: 'Copy authorization link', copyCode: 'Copy code',
@@ -51,16 +53,18 @@ window.__ModuleLoader__.load({
         saveError: 'The authorization flow finished without saving a usable credential. Reconnect; if it repeats, check the official adapter and credential service.',
       },
       zh: {
-        title: 'dsh-dk-subscriptions', description: '通过官方授权流程连接已有的编程订阅。',
+        title: 'dk-subscriptions', navigation: '订阅管理子页', modelsPage: '模型接入', toolsPage: '数据工具',
         close: '关闭', loading: '正在加载订阅…', retry: '重试', connect: '连接', reconnect: '重新连接', cancel: '取消授权', logout: '移除凭证',
         saved: '凭证已保存 · 订阅权益未验证', missing: '尚未保存订阅凭证', apiKey: '存在 API 密钥，但它不是订阅凭证。', unavailable: '暂不可用',
         running: '等待授权', authorized: '授权已完成', cancelled: '已停止等待。进行中的凭证保存可能仍会完成；如出现凭证，请移除。', failed: '授权失败',
-        openai: '使用官方订阅凭证获取当前账号可选择的 OpenAI 模型，不再把 SDK 静态目录当作账号可用列表。',
-        kimi: '仅支持 Kimi Coding 会员，不包含 Kimi 网页、金融或游戏服务。',
+        toolsTitle: 'Kimi 数据工具',
+        toolsEnabled: '已启用', toolsDisabled: '已关闭', toolsUnknown: '状态未知',
+        toolsSharedCredential: '已连接', toolsNeedsCredential: '未连接', toolsConnect: '前往连接',
+        billing: '费用说明', toolsCost: '查询可能消耗 Kimi 额度或 ExtraUsage 余额。',
         xai: '复用官方 SDK 的 Grok OAuth 流程，DSH 客户端的授权适用范围尚未独立确认。使用前请核对账号计费限制：无法保证仅消耗订阅额度，可能产生额外收费。',
         grokNews: 'Grok 与 OpenCode', grokDocs: '官方无头脚本文档',
-        model: '本地模型目录', noModels: '暂无本地模型', catalog: '这是已安装 SDK 的本地目录，不是账号接口返回的可用列表；不代表访问权限或剩余额度。',
-        accountModels: '账号模型列表', accountNoModels: '尚未加载可选择的账号模型', accountCatalog: '来自账号模型接口，不是 SDK 静态目录；不代表剩余额度，也不保证每次调用成功。',
+        model: '本地模型目录', noModels: '暂无本地模型',
+        accountModels: '账号模型列表', accountNoModels: '尚未加载可选择的账号模型',
         refreshModels: '刷新账号模型 · 不消耗推理额度', refreshingModels: '正在刷新账号模型…',
         catalogError: '未能获取账号模型列表。请检查后台网络后刷新；没有使用静态模型名称代替。',
         catalogDenied: '账号模型接口拒绝了此凭证或连接（HTTP 401/403）。请检查授权和后台网络后刷新。',
@@ -73,7 +77,7 @@ window.__ModuleLoader__.load({
         logoutConfirm: '清除与官方提供商共用的 OAuth 密钥，仅保留不含密钥的退出标记？其他使用同一凭证的 DSH 功能也将失去访问权限。',
         authorize: '打开官方授权页面', code: '授权码', submit: '提交回答', choose: '请选择',
         preparing: '正在获取授权链接，请保持此面板打开。如果约 30 秒后仍未出现链接，请取消、检查网络后重试。',
-        preparingTab: '正在准备授权，请返回「dsh-dk-subscriptions」查看进度或取消。',
+        preparingTab: '正在准备授权，请返回「dk-subscriptions」查看进度或取消。',
         opened: '已在新标签页打开授权页面，也可以使用下方链接。',
         popupBlocked: '弹窗被拦截或已关闭，请点击下方官方链接，或复制到浏览器打开。',
         authorizationLink: '官方授权链接', copyLink: '复制授权链接', copyCode: '复制授权码',
@@ -106,7 +110,6 @@ window.__ModuleLoader__.load({
       MODEL_CATALOG_FAILED: 'catalogError', MODEL_CATALOG_DENIED: 'catalogDenied', MODEL_CATALOG_INVALID: 'catalogInvalid',
       MODEL_CATALOG_RATE_LIMIT: 'catalogRateLimit', MODEL_CATALOG_CHANGED: 'catalogChanged', MODEL_CATALOG_UNAVAILABLE: 'catalogUnavailable',
     };
-    const providerNotes = { 'openai-codex': 'openai', 'kimi-coding': 'kimi', xai: 'xai' };
     // Kimi's device-code API and browser verification page use different hosts.
     // xAI's official CLI pins accounts.x.ai as its accounts/consent origin; unknown device hosts fail closed.
     const authHosts = { 'openai-codex': ['auth.openai.com'], 'kimi-coding': ['auth.kimi.com', 'www.kimi.com'], xai: ['accounts.x.ai'] };
@@ -128,8 +131,9 @@ window.__ModuleLoader__.load({
             && attempt.prompt.options.every(o => o && typeof o.id === 'string' && typeof o.label === 'string')))));
     }
     function validStatus(data) {
-      return data && Array.isArray(data.providers) && data.providers.length === 3 && new Set(data.providers.map(p => p?.id)).size === 3
-        && data.providers.every(p => p && Object.hasOwn(providerNotes, p.id) && typeof p.name === 'string'
+      return data && (data.vendorTools === undefined || typeof data.vendorTools?.kimiDatasource?.enabled === 'boolean')
+        && Array.isArray(data.providers) && data.providers.length === 3 && new Set(data.providers.map(p => p?.id)).size === 3
+        && data.providers.every(p => p && Object.hasOwn(authHosts, p.id) && typeof p.name === 'string'
           && (p.route === null || typeof p.route === 'string') && typeof p.available === 'boolean' && typeof p.configured === 'boolean'
           && [null, 'grant', 'api-key'].includes(p.credentialKind) && Array.isArray(p.models)
           && p.models.every(m => m && typeof m.id === 'string' && typeof m.name === 'string')
@@ -151,7 +155,7 @@ window.__ModuleLoader__.load({
       return data;
     }
     const styles = `
-      .subscriptions-lite{color:var(--dsw-alias-label-primary);display:grid;gap:16px;font-size:14px;line-height:1.5;min-width:0}
+      .subscriptions-lite{color:var(--dsw-alias-label-primary);display:grid;gap:20px;font-size:14px;line-height:1.5;min-width:0;width:100%;max-width:840px;margin-inline:auto}
       .subscriptions-lite *{box-sizing:border-box}.subscriptions-lite h2,.subscriptions-lite h3,.subscriptions-lite p{margin:0}
       .subscriptions-lite h2{font-size:20px}.subscriptions-lite h3{font-size:16px}
       .subscriptions-lite header,.subscriptions-lite .sl-actions,.subscriptions-lite .sl-model{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
@@ -165,7 +169,14 @@ window.__ModuleLoader__.load({
       .subscriptions-lite .sl-flow{border-top:1px solid var(--dsw-alias-border-l1);padding-top:12px;display:grid;gap:10px}
       .subscriptions-lite form{display:grid;gap:8px}.subscriptions-lite form label{display:grid;gap:4px}.subscriptions-lite form button{justify-self:start}
       .subscriptions-lite pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;background:var(--dsw-alias-bg-layer-2);padding:10px;border-radius:6px;font-size:13px}
-      .subscriptions-lite .sl-notice{display:grid;gap:5px;overflow-wrap:anywhere}.subscriptions-lite .sl-notice label{display:grid;gap:4px}.subscriptions-lite .sl-notice input{width:100%}.subscriptions-lite .sl-code{font-family:monospace;user-select:all}.subscriptions-lite .sl-route{overflow-wrap:anywhere;font-size:12px}
+      .subscriptions-lite .sl-notice{display:grid;gap:5px;overflow-wrap:anywhere}.subscriptions-lite .sl-notice label{display:grid;gap:4px}.subscriptions-lite .sl-notice input{width:100%}.subscriptions-lite .sl-code{font-family:monospace;user-select:all}
+      .subscriptions-lite .sl-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;padding:4px;border-radius:12px;background:var(--dsw-alias-bg-layer-2)}
+      .subscriptions-lite .sl-nav button{border:0;background:transparent;color:var(--dsw-alias-label-secondary);border-radius:8px;min-height:40px}
+      .subscriptions-lite .sl-nav button[aria-current=page]{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-weight:600;box-shadow:0 1px 3px #0001}
+      .subscriptions-lite .sl-page{display:grid;gap:16px;min-width:0}.subscriptions-lite .sl-data{padding:20px;gap:18px}
+      .subscriptions-lite .sl-badge{padding:3px 9px;border-radius:20px;background:var(--dsw-alias-bg-layer-2);white-space:nowrap}
+      .subscriptions-lite .sl-details{border-top:1px solid var(--dsw-alias-border-l1);padding-top:14px}.subscriptions-lite .sl-details summary{cursor:pointer;color:var(--dsw-alias-label-secondary)}
+      .subscriptions-lite .sl-details>div{display:grid;gap:10px;margin-top:12px}
     `;
     return {
       inject: ['slots', 'locale'],
@@ -194,6 +205,9 @@ window.__ModuleLoader__.load({
         }
         function Panel({ close }) {
           React.useSyncExternalStore(subscribe, snapshot, snapshot);
+          const [page, setPage] = React.useState('modelsPage');
+          const pageId = React.useId();
+          const modelsPageButton = React.useRef(null);
           const [status, setStatus] = React.useState({ providers: [], loading: true, error: null });
           const [busy, setBusy] = React.useState({});
           const [results, setResults] = React.useState({});
@@ -262,7 +276,7 @@ window.__ModuleLoader__.load({
                   updateAuthWindow(p.id, p.attempt);
                   if (p.attempt && p.attempt.id === owned.current.get(p.id) && p.attempt.state !== 'running') owned.current.delete(p.id);
                 }
-                setStatus({ providers: data.providers, loading: false, error: null });
+                setStatus({ providers: data.providers, vendorTools: data.vendorTools, loading: false, error: null });
               } catch (error) {
                 if (active) setStatus(previous => ({ ...previous, loading: false, error: error.message }));
               } finally {
@@ -365,16 +379,32 @@ window.__ModuleLoader__.load({
               if (control.current?.active()) setCopyStates(previous => ({ ...previous, [provider]: 'copyHelp' }));
             }
           }
+          const kimi = status.providers.find(provider => provider.id === 'kimi-coding');
+          const datasource = status.vendorTools?.kimiDatasource;
           const errorText = code => t(errorKeys[code] || 'requestError');
           const link = (url, label) => h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', referrerPolicy: 'no-referrer' }, label);
           return h('section', { className: 'subscriptions-lite', 'aria-label': t('title') },
             h('style', null, styles),
             h('header', null, h('h2', null, t('title')), h('button', { type: 'button', onClick: () => { control.current?.dispose(); close(); } }, t('close'))),
-            h('p', { className: 'sl-muted' }, t('description')),
+            h('nav', { className: 'sl-nav', 'aria-label': t('navigation') }, ['modelsPage', 'toolsPage'].map(id =>
+              h('button', { key: id, type: 'button', ref: id === 'modelsPage' ? modelsPageButton : undefined,
+                'aria-current': page === id ? 'page' : undefined, 'aria-controls': pageId, onClick: () => setPage(id) }, t(id)))),
             status.loading && h('p', { role: 'status' }, t('loading')),
             status.error && h('div', { role: 'alert' }, h('p', { className: 'sl-error' }, errorText(status.error)),
               h('button', { type: 'button', onClick: () => control.current?.refresh() }, t('retry'))),
-            status.providers.map(provider => {
+            h('section', { id: pageId, className: 'sl-page', 'aria-label': t(page) }, page === 'toolsPage'
+              ? kimi && h('article', { className: 'sl-card sl-data', 'aria-label': t('toolsTitle') },
+                h('header', null, h('h3', null, t('toolsTitle')),
+                  h('span', { className: `sl-status sl-badge${datasource?.enabled ? ' sl-saved' : ''}`, role: 'status' },
+                    t(!datasource ? 'toolsUnknown' : datasource.enabled ? 'toolsEnabled' : 'toolsDisabled'))),
+                h('div', { className: 'sl-actions' },
+                  h('p', { className: 'sl-status', role: 'status' }, t(kimi.configured ? 'toolsSharedCredential' : 'toolsNeedsCredential')),
+                  !kimi.configured && h('button', { type: 'button', onClick: () => {
+                    setPage('modelsPage'); modelsPageButton.current?.focus();
+                  } }, t('toolsConnect'))),
+                h('details', { className: 'sl-details' }, h('summary', null, t('billing')), h('div', null,
+                  h('p', { className: 'sl-muted' }, t('toolsCost')))))
+              : status.providers.map(provider => {
               const attempt = provider.attempt;
               const isRunning = attempt?.state === 'running';
               const isOwned = isRunning && owned.current.get(provider.id) === attempt.id;
@@ -385,16 +415,16 @@ window.__ModuleLoader__.load({
               return h('article', { key: provider.id, className: 'sl-card', 'aria-label': provider.name },
                 h('header', null, h('h3', null, provider.name), h('span', { className: `sl-status${provider.configured ? ' sl-saved' : ''}`, role: 'status' },
                   t(!provider.available ? 'unavailable' : provider.configured ? 'saved' : 'missing'))),
-                h('p', { className: 'sl-muted' }, t(providerNotes[provider.id])),
                 provider.credentialKind === 'api-key' && h('p', { className: 'sl-muted' }, t('apiKey')),
-                provider.route && h('p', { className: 'sl-route sl-muted' }, provider.route),
                 h('div', { className: 'sl-actions' },
                   h('button', { type: 'button', disabled: disabled || isRunning || !provider.available, onClick: () => startLogin(provider.id) }, t(provider.configured ? 'reconnect' : 'connect')),
                   isRunning && h('button', { type: 'button', disabled, onClick: () => run(provider.id, 'cancel', { attemptId: attempt.id }) }, t('cancel')),
                   provider.configured && h('button', { type: 'button', disabled: disabled || isRunning, onClick: () => {
                     if (window.confirm(t('logoutConfirm'))) run(provider.id, 'logout');
                   } }, t('logout'))),
-                provider.id === 'xai' && h('div', { className: 'sl-actions' }, link('https://x.ai/news/grok-opencode', t('grokNews')), link('https://docs.x.ai/build/cli/headless-scripting', t('grokDocs'))),
+                provider.id === 'xai' && h('details', { className: 'sl-details' }, h('summary', null, t('billing')), h('div', null,
+                  h('p', { className: 'sl-muted' }, t('xai')),
+                  h('div', { className: 'sl-actions' }, link('https://x.ai/news/grok-opencode', t('grokNews')), link('https://docs.x.ai/build/cli/headless-scripting', t('grokDocs'))))),
                 provider.available && h(React.Fragment, null,
                   accountCatalog && provider.configured && h('button', { type: 'button', disabled: disabled || isRunning,
                     onClick: () => run(provider.id, 'models') }, t(busy[provider.id] === 'models' ? 'refreshingModels' : 'refreshModels')),
@@ -406,8 +436,7 @@ window.__ModuleLoader__.load({
                   h('button', { type: 'button', disabled: disabled || isRunning || !provider.configured || !model, onClick: () => {
                     const warning = provider.id === 'xai' ? `\n${t('xai')}` : '';
                     if (window.confirm(`${t('testConfirm')}\n${model}${warning}`)) run(provider.id, 'test', { model });
-                  } }, t(busy[provider.id] === 'test' ? 'testing' : 'test'))),
-                  h('p', { className: 'sl-muted' }, t(accountCatalog ? 'accountCatalog' : 'catalog'))),
+                  } }, t(busy[provider.id] === 'test' ? 'testing' : 'test')))),
                 attempt && h('div', { className: 'sl-flow' },
                   h('p', { role: 'status' }, t(attempt.state)),
                   attempt.error && h('p', { className: 'sl-error', role: 'alert' }, errorText(attempt.error)),
@@ -435,7 +464,7 @@ window.__ModuleLoader__.load({
                     answer: value => run(provider.id, 'answer', { attemptId: attempt.id, promptId: attempt.prompt.id, value }) })),
                 result && (result.error ? h('p', { className: 'sl-error', role: 'alert' }, errorText(result.error))
                   : h('div', { className: 'sl-notice', role: 'status' }, h('p', null, `${t('testResult')} · ${result.model}`), h('pre', null, result.text))));
-            }));
+            })));
         }
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section', id: 'subscriptions-lite', order: 55, label: () => t('title'),

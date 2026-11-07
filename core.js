@@ -109,7 +109,7 @@ function safeNotice(notice) {
   return result;
 }
 
-export function createSubscriptions({ authorization, credentials, llm, catalog, keyFor, accountModels = new Map(), timeoutMs = 15 * 60 * 1000 }) {
+export function createSubscriptions({ authorization, credentials, llm, catalog, keyFor, accountModels = new Map(), vendorTools, timeoutMs = 15 * 60 * 1000 }) {
   const attempts = new Map();
   const tests = new Map();
   const loggingOut = new Set();
@@ -153,7 +153,7 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     await models.ensure(options);
   }
   async function status(signal) {
-    return { providers: await Promise.all(PROVIDERS.map(async p => {
+    return { vendorTools, providers: await Promise.all(PROVIDERS.map(async p => {
       if (!p.route || !supported.has(p.id)) return { ...p, available: false, configured: false, credentialKind: null, models: [],
         modelCatalog: { source: 'none', state: 'unavailable', error: null, updatedAt: null }, attempt: null };
       const record = await credentials.readRecord(keyFor(p.id));

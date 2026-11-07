@@ -5,11 +5,15 @@ import { createHttpHandler, createSubscriptions, fail, PROVIDERS, safeError, sub
 import { createAutoProxy } from './network.js';
 import { createAccountModels } from './models.js';
 import { accountModelSources } from './model-sources.js';
+import { createKimiTools } from './kimi-tools.js';
+import packageInfo from './package.json' with { type: 'json' };
 
-export const name = 'dsh-dk-subscriptions';
+export const name = 'dk-subscriptions';
 export const inject = ['authorization', 'credentials', 'llm', 'connection', 'tools'];
 
-export async function apply(ctx) {
+export async function apply(ctx, { kimiDatasource = false } = {}) {
+  if (typeof kimiDatasource !== 'boolean') throw new TypeError('kimiDatasource must be a boolean.');
+  const kimiDatasourceStatus = Object.freeze({ enabled: kimiDatasource, reason: kimiDatasource ? null : 'NOT_ENABLED' });
   // Resolve the exact pi-ai version shipped with the official adapter, not a
   // second transport/auth installation or a package copied into this bundle.
   const require = createRequire(import.meta.url);
@@ -92,12 +96,13 @@ export async function apply(ctx) {
   api = createSubscriptions({ authorization: {
     describe: key => ctx.authorization.describe(key),
     begin: request => network.run(() => ctx.authorization.begin(request)),
-  }, credentials: ctx.credentials, llm: ctx.llm, catalog, keyFor: recordKeyFor, accountModels });
+  }, credentials: ctx.credentials, llm: ctx.llm, catalog, keyFor: recordKeyFor, accountModels,
+    vendorTools: { kimiDatasource: kimiDatasourceStatus } });
   ctx.connection.fetch.register({ path: '/api/subscriptions-lite', methods: ['GET', 'POST'],
     requestBody: 'buffered', fetch: createHttpHandler(api) });
   ctx.tools.register({
     name: 'subscription_accounts',
-    description: 'Inspect subscription status and account model metadata, refresh a supported provider’s account model list, test a selected model, or clear local OAuth secrets. Status may refresh registered account model sources using official subscription credentials, but never sends inference. Never starts or completes login: the user authorizes in Settings → dsh-dk-subscriptions. Tests consume quota and Grok may incur server-side extra charges; no API-key fallback. Providers without a registered account source, including Grok, are explicitly labeled SDK-local; this is not verified account access or a subscription-only billing guarantee. Logout also signs out the shared official pi-ai route, without cancelling a plan or revoking the account remotely.',
+    description: 'Inspect subscription status and account model metadata, refresh a supported provider’s account model list, test a selected model, or clear local OAuth secrets. Status may refresh registered account model sources using official subscription credentials, but never sends inference. Never starts or completes login: the user authorizes in Settings → dk-subscriptions. Tests consume quota and Grok may incur server-side extra charges; no API-key fallback. Providers without a registered account source, including Grok, are explicitly labeled SDK-local; this is not verified account access or a subscription-only billing guarantee. Logout also signs out the shared official pi-ai route, without cancelling a plan or revoking the account remotely.',
     parameters: {
       type: 'object', properties: {
         action: { type: 'string', enum: ['status', 'models', 'test', 'logout'], description: 'status may query account model metadata. models forces a registered provider’s metadata refresh; unsupported discovery is reported explicitly. Neither sends inference. test sends a small coding prompt. logout removes the shared local OAuth grant only.' },
@@ -112,7 +117,8 @@ export async function apply(ctx) {
         if (args.action === 'status') {
           const result = await api.status(exec.signal);
           // OAuth codes/URLs and prompts belong only to the human interaction surface.
-          return { network: network.status(), providers: result.providers.map(({ attempt, ...p }) => ({ ...p, loginState: attempt?.state ?? null })) };
+          return { network: network.status(), vendorTools: result.vendorTools,
+            providers: result.providers.map(({ attempt, ...p }) => ({ ...p, loginState: attempt?.state ?? null })) };
         }
         if (args.action === 'models') return await api.refreshModels(args.provider, exec.signal);
         if (args.action === 'test') return await api.test(args.provider, args.model, exec.signal);
@@ -121,4 +127,10 @@ export async function apply(ctx) {
       } catch (error) { return safeError(error); }
     },
   });
+  for (const tool of createKimiTools({
+    enabled: kimiDatasourceStatus.enabled, version: packageInfo.version, signal: lifetime.signal,
+    getAuth: signal => network.run(() => authModels.getAuth('subscription-kimi-coding', { signal })),
+    fetchTool: (url, options) => network.run(() => fetch(url, options)),
+    attachments: () => ctx.get('attachments'),
+  })) ctx.tools.register(tool);
 }

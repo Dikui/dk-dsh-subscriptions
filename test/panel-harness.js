@@ -77,12 +77,12 @@ export async function panelHarness({ fetch, open = () => null, clipboard, confir
     return nodes(card);
   }
   function button(label, provider = 'Kimi Code') {
-    const found = within(provider).find(node => node.type === 'button' && text(node) === label);
+    const found = (provider ? within(provider) : nodes()).find(node => node.type === 'button' && text(node) === label);
     assert.ok(found, `missing button: ${label}`); return found;
   }
   render(); await flush();
   return {
-    get tree() { return tree; }, text: () => text(tree), nodes, within, button, flush,
+    get tree() { return tree; }, text: (node = tree) => text(node), nodes, within, button, flush,
     async click(label, provider) { const node = button(label, provider); assert.ok(!node.props.disabled); const work = node.props.onClick(); await flush(); return work; },
     async poll() { const pending = [...timers.values()]; timers.clear(); pending.forEach(callback => callback()); await flush(); },
     dispose() { for (const cell of cells) cell?.cleanup?.(); cleanups.forEach(fn => fn?.()); timers.clear(); },

@@ -1,4 +1,4 @@
-# dsh-dk-subscriptions
+# dk-subscriptions
 
 一个独立的、非官方订阅连接插件。复用 DeepSeek Harness 自带的 `@deepseek-ai/dsh-llm-pi-ai` OAuth、消息转换和推理协议；OpenAI 模型名称从账号模型接口获取，不再使用 SDK 静态目录充当账号列表。不复制 OAuth 协议，不修改 DSH 核心，不替换已有订阅插件。
 
@@ -10,19 +10,32 @@
 | Kimi | Kimi Code 订阅，模型目录仍来自本地 SDK，非通用网页会员接口 | `subscription-kimi-coding` |
 | Grok | 复用官方 SDK 的 xAI OAuth，模型目录来自本地 SDK | `subscription-xai` |
 
-代码接入不代表账户权益已验证。OpenAI 列表只包含账号接口标为可显示、且未标为禁止 API 使用的模型；它不是剩余额度或每次推理成功的保证。Kimi 和 Grok 的本地目录也不代表账号权限已验证。本项目不承诺官方背书，不提供虚构的余额或配额数据，不包含金融、游戏、网页搜索等产品工具。
+代码接入不代表账户权益已验证。OpenAI 列表只包含账号接口标为可显示、且未标为禁止 API 使用的模型；它不是剩余额度或每次推理成功的保证。Kimi 和 Grok 的本地目录也不代表账号权限已验证。本项目不承诺官方背书，不提供虚构的余额或配额数据。Kimi Datasource 已完成独立工具适配，是否开放由插件配置决定；这不代表所有数据库权益已验证。其他游戏、网页搜索等产品工具不在范围内。
 
 Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses 传输，不另写 OAuth 或安装 CLI。xAI 已公开支持 [OpenCode](https://x.ai/news/grok-opencode) 及 [Grok Build/ACP](https://docs.x.ai/build/cli/headless-scripting)，但这不等于 DSH 客户端的授权适用范围已获确认。**不回退 API key 只能限制客户端认证方式，不能保证服务端不使用预付 credits 或产生额外收费。** 使用前应核对账号计费限制；面板测试会再次提示，真实授权及计费仍需用户另行验证。
 
 ## 使用
 
 1. 在 DSH 安装本目录作为本地 bundle（由 `plugin_manager install_bundle` 完成，勿直接改 profile）。
-2. 打开 **设置 → dsh-dk-subscriptions**，选择 OpenAI、Kimi 或 Grok 登录。Grok 需要当前官方 SDK 提供 xAI OAuth；旧 SDK 不支持时保持不可用。
+2. 打开 **设置 → dk-subscriptions → 模型接入**，选择 OpenAI、Kimi 或 Grok 登录。**数据工具**是独立子页，两类内容不会同时显示。Grok 需要当前官方 SDK 提供 xAI OAuth；旧 SDK 不支持时保持不可用。
 3. 点击连接会先打开等待页，取得官方授权链接后跳转。若弹窗受限，可直接点击面板里的 **打开官方授权页面**，或 **复制授权链接** 到浏览器，再使用显示的授权码。由用户确认账户和授权；插件及代理工具不代填账号密码、不代点授权同意。
 4. OpenAI 授权后自动加载账号模型；也可点击 **刷新账号模型 · 不消耗推理额度**，只查询元数据。Kimi / Grok 显示本地 SDK 目录，不探测账号权益。另行点击模型测试并确认后才会发送很短的编码问题，**消耗额度；Grok 还可能额外收费**。
 5. 主会话的模型选择器使用上表的独立路由。已有其他插件的路由保持不变。
 
 兼容性暂固定为 **DSH 0.2.1-rc.5**：虽然 `PiAiAdapter` 是包导出，其构造 profile 的结构仍可能变化。升级 DSH 前应重新验证，不要绕过版本限制。
+
+## Kimi 数据工具（显式启用）
+
+打开 **设置 → dk-subscriptions → 数据工具**。页面只保留标题、状态和必要操作，费用提示收进默认关闭的 **费用说明**。未连接时点击 **前往连接** 返回模型接入页，不会自动开始授权；切换子页不打断授权，也不发送查询。
+
+在聊天中可以这样提问：**用 Kimi 世界银行数据查询中国最近五个有数据年份的 GDP，列成表格并注明单位与来源。** 这不是“只读说明”的功能限制，也不要求当前模型是 Kimi；实际调用仍需确认可能产生的额度或余额消耗。
+
+已独立注册 `kimi_get_data_source_desc` 与 `kimi_call_data_source_tool`，不经过模型推理流，也不要求主模型是 Kimi。实现见 [kimi-tools.js](<kimi-tools.js>)。
+
+- 无配置时默认关闭，返回 `KIMI_DATASOURCE_DISABLED`，在读取凭证、访问附件或联网前停止。**本地 bundle 已按用户要求在 [cordis.patch.yml](<cordis.patch.yml>) 设置 `config.kimiDatasource: true`**；改为 `false` 可关闭，重新加载插件后生效。设置页状态接口与 `subscription_accounts` 共用 `vendorTools.kimiDatasource`，不会用启用或登录成功冒充数据权益已验证。
+- 已接好现有共享 Kimi OAuth 与插件作用域代理。离线检查覆盖动态 API 参数、两种请求体、取消、错误脱敏及不重试；不读取 Kimi CLI 凭证，不安装或执行官方插件，不回退 API key，不冒充官方客户端。
+- 解析器将完整 JSON 响应存为宿主附件，只内联最多 16,000 个字符的文本预览并标记截断；嵌入的文件保留在 JSON 中，不自动解码或按上游路径写文件。当前请求上限 64 KiB、响应上限 32 MiB、网络与授权阶段最长 30 秒，附件存储不支持时拒绝发起查询。首版排除需要单独 `MP_API_KEY` 的 `materials_project`。
+- 第三方客户端细则、全部源权益与精确计费仍未知；启用不是厂商支持承诺。**包括说明查询在内，都可能扣套餐额度或 ExtraUsage 余额**，请明确授权后再调用。本项目始终使用真实名称与版本，不伪装成 Kimi Code。已取回 World Bank 的真实说明，修正 JSON 字符串解析后离线重放通过；实际取数、其他源与 GUI 端到端仍未验证。
 
 ## 账号模型列表
 
@@ -68,7 +81,7 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 
 ## 名称变更
 
-自 0.1.3 起，包名与界面名称统一为 `dsh-dk-subscriptions`。改名不迁移或删除 OAuth 凭证，不改变现有模型路由；内部设置页标识、HTTP 路径和请求头保留兼容名称，以免影响已有调用。
+包名与界面名称统一为 `dk-subscriptions`，GitHub 仓库为 [Dikui/dk-subscriptions](https://github.com/Dikui/dk-subscriptions)。改名不迁移或删除 OAuth 凭证，不改变现有模型路由；内部设置页标识、HTTP 路径和请求头保留兼容名称，以免影响已有调用。
 
 ## 开发与验证
 

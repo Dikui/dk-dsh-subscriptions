@@ -33,7 +33,7 @@ test('registered subscription routes preserve their native runtime contracts', {
     return specifier === '@deepseek-ai/dsh-llm-pi-ai'
       ? { url: pathToFileURL(adapterEntry).href, shortCircuit: true } : next(specifier, context);
   } });
-  const dispose = [], records = new Map();
+  const dispose = [], records = new Map(), tools = new Map();
   let adapter, tool, modelSources, originalKimiSource;
   try {
     const native = await import(pathToFileURL(adapterEntry).href);
@@ -63,9 +63,64 @@ test('registered subscription routes preserve their native runtime contracts', {
     await apply({ credentials,
       on(event, callback) { assert.equal(event, 'dispose'); dispose.push(callback); }, get() {},
       authorization: { describe: () => ({ methods: [{ id: 'oauth' }] }), begin: () => assert.fail('No login in offline tests') },
-      llm, connection: { fetch: { register() {} } }, tools: { register(value) { tool = value; } },
+      llm, connection: { fetch: { register() {} } }, tools: { register(value) { tools.set(value.name, value); } },
     });
+    tool = tools.get('subscription_accounts');
+    assert.deepEqual([...tools.keys()].sort(), ['kimi_call_data_source_tool', 'kimi_get_data_source_desc', 'subscription_accounts']);
     const exec = { signal: new AbortController().signal };
+    await t.test('Datasource gate prevents credential reads and transport even with a stored grant', async () => {
+      records.set(native.recordKeyFor('kimi-coding'), { kind: 'grant', payload: {
+        type: 'oauth', access: 'SYNTHETIC-KIMI-EXPIRED', refresh: 'SYNTHETIC-KIMI-REFRESH', expires: 0,
+      } });
+      const before = agent.getCallHistory().calls().length;
+      const readRecord = credentials.readRecord, modifyRecord = credentials.modifyRecord;
+      credentials.readRecord = credentials.modifyRecord = () => assert.fail('Disabled Datasource must not touch credentials');
+      try {
+        for (const name of ['kimi_get_data_source_desc', 'kimi_call_data_source_tool']) {
+          assert.deepEqual(await tools.get(name).execute({}, exec), { error: 'KIMI_DATASOURCE_DISABLED' });
+        }
+        assert.equal(agent.getCallHistory().calls().length, before);
+      } finally {
+        credentials.readRecord = readRecord; credentials.modifyRecord = modifyRecord;
+        records.delete(native.recordKeyFor('kimi-coding'));
+      }
+    });
+    await t.test('explicit Datasource opt-in uses shared OAuth without entering model inference', async () => {
+      await assert.rejects(apply({}, { kimiDatasource: 'true' }), /kimiDatasource must be a boolean/);
+      const enabledTools = new Map(), saved = [];
+      let settingsFetch;
+      records.set(native.recordKeyFor('kimi-coding'), { kind: 'grant', payload: {
+        type: 'oauth', access: 'SYNTHETIC-KIMI-TOOLS', expires: Date.now() + 3600000,
+      } });
+      await apply({ credentials,
+        on(event, callback) { assert.equal(event, 'dispose'); dispose.push(callback); },
+        get: () => ({ async saveFile(value) { saved.push(value); return { attachmentId: 'SYNTHETIC-REF', name: value.name, bytes: value.data.length }; } }),
+        authorization: { describe: () => ({ methods: [{ id: 'oauth' }] }) },
+        llm: { registerAdapter() {}, emitAdaptersUpdated() {}, stream: () => assert.fail('Datasource must not enter inference') },
+        connection: { fetch: { register({ fetch }) { settingsFetch = fetch; } } }, tools: { register: value => enabledTools.set(value.name, value) },
+      }, { kimiDatasource: true });
+      const state = await enabledTools.get('subscription_accounts').execute({ action: 'status' }, exec);
+      assert.deepEqual(state.vendorTools.kimiDatasource, { enabled: true, reason: null });
+      const settings = await settingsFetch(new Request('http://dsh.internal/api/subscriptions-lite'));
+      assert.equal(settings.status, 200);
+      assert.deepEqual((await settings.json()).vendorTools, state.vendorTools);
+      assert.equal(agent.getCallHistory().calls().length, 0, 'settings status must not probe Datasource');
+      let requestBody;
+      agent.get('https://api.kimi.com').intercept({ method: 'POST', path: '/coding/v1/tools',
+        headers: { authorization: 'Bearer SYNTHETIC-KIMI-TOOLS' } }).reply(200, async ({ body }) => {
+          requestBody = JSON.parse(await new Response(body).text());
+          return JSON.stringify('Synthetic source documentation');
+        }, { headers: { 'content-type': 'application/json' } });
+      const result = await enabledTools.get('kimi_get_data_source_desc').execute({ name: 'world_bank_open_data' }, exec);
+      assert.equal(result.text, 'Synthetic source documentation');
+      assert.equal(saved.length, 1);
+      assert.deepEqual(requestBody, { method: 'get_data_source_desc', params: { name: 'world_bank_open_data' } });
+      assert.deepEqual(agent.getCallHistory().calls().map(call => [call.method, call.origin, call.path]), [
+        ['POST', 'https://api.kimi.com', '/coding/v1/tools'],
+      ]);
+      records.delete(native.recordKeyFor('kimi-coding'));
+      agent.clearCallHistory();
+    });
     const vendors = [
       { id: 'openai-codex', route: 'subscription-openai-codex', model: 'server-only-model' },
       { id: 'kimi-coding', route: 'subscription-kimi-coding', model: 'second-server-model' },
@@ -84,6 +139,7 @@ test('registered subscription routes preserve their native runtime contracts', {
       const state = status.providers.find(item => item.id === vendor.id);
       assert.deepEqual(state.models.map(item => item.id), [model]);
       assert.equal(state.modelCatalog.source, 'account');
+      assert.deepEqual(status.vendorTools.kimiDatasource, { enabled: false, reason: 'NOT_ENABLED' });
       assert.ok(!JSON.stringify(status).includes('SYNTHETIC-'));
       assert.equal((await adapter.resolveModel(route, model)).context.contextWindow, 100000);
       const sent = [];
