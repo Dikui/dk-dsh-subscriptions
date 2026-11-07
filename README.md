@@ -22,7 +22,7 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 4. OpenAI 授权后自动加载账号模型；也可点击 **刷新账号模型 · 不消耗推理额度**，只查询元数据。Kimi / Grok 显示本地 SDK 目录，不探测账号权益。另行点击模型测试并确认后才会发送很短的编码问题，**消耗额度；Grok 还可能额外收费**。
 5. 主会话的模型选择器使用上表的独立路由。已有其他插件的路由保持不变。
 
-兼容性暂固定为 **DSH 0.2.1-rc.5**：虽然 `PiAiAdapter` 是包导出，其构造 profile 的结构仍可能变化。升级 DSH 前应重新验证，不要绕过版本限制。
+兼容性仅声明 **DSH 0.2.1-rc.5 和 0.2.2-rc.1**，官方 `@deepseek-ai/dsh-llm-pi-ai` 使用相同版本范围。0.1.8 修复旧版精确锁定导致 0.2.2-rc.1 安装或启动时被兼容性检查拒绝的问题；已在该桌面版本的 Node 24.21.0 下通过真实适配器的离线回归，不需要版本豁免。虽然 `PiAiAdapter` 是包导出，其构造 profile 的结构仍可能变化；其他版本需重新验证，不使用宽泛范围绕过版本限制。更新本地 bundle 后需完全退出并重启 DSH；若安装的是打包副本而非本目录链接，先通过插件管理器重新安装新版。
 
 ## Kimi 数据工具（显式启用）
 
@@ -103,6 +103,14 @@ npm pack --dry-run
 ```
 
 零新增运行时依赖。使用当前官方适配器安装位置解析其配套 pi-ai，不引入第二套 SDK。测试覆盖 OAuth 类型边界、无 API fallback、刷新与注销、提示身份/取消、脱敏、路由选择和 HTTP 同源要求，以及连接点击、异步授权链接、弹窗/剪贴板备用入口、恢复授权和窗口清理。面板事件测试使用确定性的 hook 测试夹具与合成授权数据，不是真实 React/浏览器测试，不验证浏览器弹窗策略或厂商接口连通性。
+
+[兼容性回归](<test/compatibility-runtime.test.js>) 使用所选 DSH 安装中的真实 `evaluatePluginCompatibility` 检查安装/启动门禁：已声明版本无需豁免即可通过，未验证版本仍被拒绝，同时检查 `engines.dsh` 与适配器 peer 声明。以下命令在 macOS 桌面版 0.2.2-rc.1 下执行全部离线测试（MockAgent 禁止真实厂商请求，不修改 profile 或账号凭证）：
+
+```sh
+ELECTRON_RUN_AS_NODE=1 \
+  DSH_TEST_UNDICI='/Applications/DeepSeek Harness.app/Contents/Resources/app.asar/dsh/node_modules/undici' \
+  '/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness' --test test/*.test.js
+```
 
 原生 `fetch` 的 dispatcher 协议随 Node 版本变化；代理回归检查应使用 **DSH 实际启动的 Node 运行时**，而不只使用终端的 `node`。将 `DSH_TEST_UNDICI` 指向 DSH 配套的 Undici 目录后，运行 `--test test/network-runtime.test.js`。该检查使用 MockAgent，禁用真实网络，覆盖桌面 Node 24 协议兼容和全局 fetch 防递归补丁跳回原始 fetch 的场景；依赖不可用时默认跳过，不把跳过算作通过。
 
