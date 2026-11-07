@@ -39,7 +39,9 @@ test('model connections and data tools occupy separate bilingual subpages', asyn
   for (const language of ['en', 'zh']) {
     for (const enabled of [undefined, false, true]) {
       const state = initialStatus(); let requests = 0;
-      if (enabled !== undefined) state.vendorTools = { kimiDatasource: { enabled } };
+      if (enabled !== undefined) state.vendorTools = {
+        kimiDatasource: { enabled }, grokXSearch: { enabled: !enabled, reason: enabled ? 'NOT_ENABLED' : null },
+      };
       const panel = await panelHarness({ language, fetch: async (path, options) => {
         assert.equal(path, '/api/subscriptions-lite'); assert.equal(options.method, 'GET'); requests++;
         return Response.json(state); // Navigation must never issue a Datasource or inference request.
@@ -47,6 +49,7 @@ test('model connections and data tools occupy separate bilingual subpages', asyn
       try {
         const labels = language === 'en' ? ['Model connections', 'Data tools'] : ['模型接入', '数据工具'];
         const toolTitle = language === 'en' ? 'Kimi data tools' : 'Kimi 数据工具';
+        const grokTitle = language === 'en' ? 'Grok X Search' : 'Grok X 搜索';
         for (const label of [labels[0], labels[1], labels[0], labels[1]]) {
           await panel.click(label, null);
           const navigation = panel.nodes().find(node => node.type === 'nav');
@@ -58,7 +61,7 @@ test('model connections and data tools occupy separate bilingual subpages', asyn
           const page = panel.nodes().find(node => node.props.id === buttons[0].props['aria-controls']);
           assert.equal(page.props['aria-label'], label);
           const cards = panel.nodes(page).filter(node => node.type === 'article').map(node => node.props['aria-label']);
-          assert.deepEqual(cards, label === labels[0] ? ['OpenAI · ChatGPT', 'Kimi Code', 'Grok'] : [toolTitle]);
+          assert.deepEqual(cards, label === labels[0] ? ['OpenAI · ChatGPT', 'Kimi Code', 'Grok'] : [toolTitle, grokTitle]);
           for (const card of panel.nodes(page).filter(node => node.type === 'article')) {
             const details = panel.nodes(card).filter(node => node.type === 'details');
             const folded = new Set(details.flatMap(node => panel.nodes(node)));
@@ -77,36 +80,49 @@ test('model connections and data tools occupy separate bilingual subpages', asyn
         assert.equal(panel.text(panel.nodes(details).find(node => node.type === 'summary')), language === 'en' ? 'Billing' : '费用说明');
         assert.match(panel.text(details), /ExtraUsage/);
         assert.equal(panel.nodes(card).some(node => node.type === 'select'), false);
+        const grok = panel.within(grokTitle)[0], grokBilling = panel.nodes(grok).find(node => node.type === 'details');
+        assert.match(panel.text(grok), enabled === undefined ? /Status unknown|状态未知/ : enabled ? /Disabled|已关闭/ : /Enabled|已启用/);
+        assert.ok(grokBilling && !grokBilling.props.open);
+        assert.match(panel.text(grokBilling), language === 'en' ? /Grok inference and X Search.*extra charges/ : /Grok 推理和 X Search.*额外收费/);
+        assert.match(panel.text(grokBilling), language === 'en' ? /OAuth does not guarantee subscription-only billing/ : /OAuth 授权不保证仅消耗订阅额度/);
+        for (const toolCard of [card, grok]) {
+          assert.deepEqual(panel.nodes(toolCard).filter(node => node.type === 'button').map(node => panel.text(node)),
+            [language === 'en' ? 'Go to connections' : '前往连接']);
+          assert.equal(panel.nodes(toolCard).some(node => ['input', 'select', 'form'].includes(node.type)), false);
+        }
         assert.equal(requests, 1, 'switching subpages does not reload the account or call paid tools');
       } finally { panel.dispose(); }
     }
   }
 });
 
-// small/spec — tool access shares Kimi OAuth; the connection shortcut only navigates, never starts OAuth.
-test('Kimi tool credential guidance follows the shared OAuth status', async () => {
-  for (const configured of [false, true]) {
-    const state = initialStatus();
-    state.vendorTools = { kimiDatasource: { enabled: true } };
-    const kimi = state.providers.find(provider => provider.id === 'kimi-coding');
-    kimi.configured = configured; kimi.credentialKind = configured ? 'grant' : null;
-    const panel = await panelHarness({ fetch: async (_path, options) => {
-      assert.equal(options.method, 'GET'); return Response.json(state);
-    } });
-    try {
-      let focused = 0;
-      panel.button('Model connections', null).props.ref.current = { focus() { focused++; } }; // Native focus target, not another authorization service.
-      await panel.click('Data tools', null);
-      const card = panel.within('Kimi data tools')[0];
-      const status = panel.nodes(card).find(node => node.type === 'p' && node.props.role === 'status');
-      assert.equal(panel.text(status), configured ? 'Connected' : 'Not connected');
-      assert.equal(panel.nodes(card).some(node => node.type === 'button'), !configured);
-      if (!configured) {
-        await panel.click('Go to connections', 'Kimi data tools');
-        assert.ok(panel.within('Kimi Code'));
-        assert.equal(focused, 1);
-      }
-    } finally { panel.dispose(); }
+// small/spec — tools share vendor OAuth; connection shortcuts only navigate, never start OAuth.
+test('tool credential guidance follows each vendor’s shared OAuth status', async () => {
+  for (const [id, title, modelTitle] of [['kimi-coding', 'Kimi data tools', 'Kimi Code'], ['xai', 'Grok X Search', 'Grok']]) {
+    for (const configured of [false, true]) {
+      const state = initialStatus();
+      state.vendorTools = { kimiDatasource: { enabled: true } }; // Legacy Kimi-only metadata still renders Grok as unknown.
+      const provider = state.providers.find(provider => provider.id === id);
+      provider.configured = configured; provider.credentialKind = configured ? 'grant' : null;
+      const panel = await panelHarness({ fetch: async (_path, options) => {
+        assert.equal(options.method, 'GET'); return Response.json(state);
+      } });
+      try {
+        let focused = 0;
+        panel.button('Model connections', null).props.ref.current = { focus() { focused++; } }; // Native focus target, not another authorization service.
+        await panel.click('Data tools', null);
+        const card = panel.within(title)[0];
+        const status = panel.nodes(card).find(node => node.type === 'p' && node.props.role === 'status');
+        assert.equal(panel.text(status), configured ? 'Connected' : 'Not connected');
+        assert.equal(panel.nodes(card).some(node => node.type === 'button'), !configured);
+        assert.match(panel.text(panel.within('Grok X Search')[0]), /Status unknown/);
+        if (!configured) {
+          await panel.click('Go to connections', title);
+          assert.ok(panel.within(modelTitle));
+          assert.equal(focused, 1);
+        }
+      } finally { panel.dispose(); }
+    }
   }
 });
 

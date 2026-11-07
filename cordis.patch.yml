@@ -3,3 +3,4 @@
       name: 'dk-subscriptions'
       config:
         kimiDatasource: true
+        grokXSearch: true

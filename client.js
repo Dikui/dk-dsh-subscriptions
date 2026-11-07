@@ -10,10 +10,11 @@ window.__ModuleLoader__.load({
         close: 'Close', loading: 'Loading subscriptions…', retry: 'Retry', connect: 'Connect', reconnect: 'Reconnect', cancel: 'Cancel authorization', logout: 'Remove credential',
         saved: 'Credential saved · entitlement not verified', missing: 'No subscription credential saved', apiKey: 'An API key exists; it is not a subscription credential.', unavailable: 'Unavailable',
         running: 'Waiting for authorization', authorized: 'Authorization finished', cancelled: 'Stopped waiting. A pending credential save may still finish; remove it if it appears.', failed: 'Authorization failed',
-        toolsTitle: 'Kimi data tools',
+        toolsTitle: 'Kimi data tools', grokToolsTitle: 'Grok X Search',
         toolsEnabled: 'Enabled', toolsDisabled: 'Disabled', toolsUnknown: 'Status unknown',
         toolsSharedCredential: 'Connected', toolsNeedsCredential: 'Not connected', toolsConnect: 'Go to connections',
         billing: 'Billing', toolsCost: 'Requests may use Kimi quota or ExtraUsage balance.',
+        grokToolsCost: 'Grok inference and X Search may incur extra charges. OAuth does not guarantee subscription-only billing.',
         xai: 'Uses the official SDK’s Grok OAuth flow; DSH authorization scope is not independently confirmed. Check billing limits before use: subscription-only billing is not guaranteed and extra charges may apply.',
         grokNews: 'Grok and OpenCode', grokDocs: 'Official headless scripting docs',
         model: 'Local model catalog', noModels: 'No local models available',
@@ -57,10 +58,11 @@ window.__ModuleLoader__.load({
         close: '关闭', loading: '正在加载订阅…', retry: '重试', connect: '连接', reconnect: '重新连接', cancel: '取消授权', logout: '移除凭证',
         saved: '凭证已保存 · 订阅权益未验证', missing: '尚未保存订阅凭证', apiKey: '存在 API 密钥，但它不是订阅凭证。', unavailable: '暂不可用',
         running: '等待授权', authorized: '授权已完成', cancelled: '已停止等待。进行中的凭证保存可能仍会完成；如出现凭证，请移除。', failed: '授权失败',
-        toolsTitle: 'Kimi 数据工具',
+        toolsTitle: 'Kimi 数据工具', grokToolsTitle: 'Grok X 搜索',
         toolsEnabled: '已启用', toolsDisabled: '已关闭', toolsUnknown: '状态未知',
         toolsSharedCredential: '已连接', toolsNeedsCredential: '未连接', toolsConnect: '前往连接',
         billing: '费用说明', toolsCost: '查询可能消耗 Kimi 额度或 ExtraUsage 余额。',
+        grokToolsCost: 'Grok 推理和 X Search 可能产生额外收费。OAuth 授权不保证仅消耗订阅额度。',
         xai: '复用官方 SDK 的 Grok OAuth 流程，DSH 客户端的授权适用范围尚未独立确认。使用前请核对账号计费限制：无法保证仅消耗订阅额度，可能产生额外收费。',
         grokNews: 'Grok 与 OpenCode', grokDocs: '官方无头脚本文档',
         model: '本地模型目录', noModels: '暂无本地模型',
@@ -131,7 +133,9 @@ window.__ModuleLoader__.load({
             && attempt.prompt.options.every(o => o && typeof o.id === 'string' && typeof o.label === 'string')))));
     }
     function validStatus(data) {
-      return data && (data.vendorTools === undefined || typeof data.vendorTools?.kimiDatasource?.enabled === 'boolean')
+      return data && (data.vendorTools === undefined || (typeof data.vendorTools?.kimiDatasource?.enabled === 'boolean'
+        && (!Object.hasOwn(data.vendorTools, 'grokXSearch') || (typeof data.vendorTools.grokXSearch?.enabled === 'boolean'
+          && [null, 'NOT_ENABLED'].includes(data.vendorTools.grokXSearch.reason)))))
         && Array.isArray(data.providers) && data.providers.length === 3 && new Set(data.providers.map(p => p?.id)).size === 3
         && data.providers.every(p => p && Object.hasOwn(authHosts, p.id) && typeof p.name === 'string'
           && (p.route === null || typeof p.route === 'string') && typeof p.available === 'boolean' && typeof p.configured === 'boolean'
@@ -379,8 +383,6 @@ window.__ModuleLoader__.load({
               if (control.current?.active()) setCopyStates(previous => ({ ...previous, [provider]: 'copyHelp' }));
             }
           }
-          const kimi = status.providers.find(provider => provider.id === 'kimi-coding');
-          const datasource = status.vendorTools?.kimiDatasource;
           const errorText = code => t(errorKeys[code] || 'requestError');
           const link = (url, label) => h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', referrerPolicy: 'no-referrer' }, label);
           return h('section', { className: 'subscriptions-lite', 'aria-label': t('title') },
@@ -393,17 +395,24 @@ window.__ModuleLoader__.load({
             status.error && h('div', { role: 'alert' }, h('p', { className: 'sl-error' }, errorText(status.error)),
               h('button', { type: 'button', onClick: () => control.current?.refresh() }, t('retry'))),
             h('section', { id: pageId, className: 'sl-page', 'aria-label': t(page) }, page === 'toolsPage'
-              ? kimi && h('article', { className: 'sl-card sl-data', 'aria-label': t('toolsTitle') },
-                h('header', null, h('h3', null, t('toolsTitle')),
-                  h('span', { className: `sl-status sl-badge${datasource?.enabled ? ' sl-saved' : ''}`, role: 'status' },
-                    t(!datasource ? 'toolsUnknown' : datasource.enabled ? 'toolsEnabled' : 'toolsDisabled'))),
-                h('div', { className: 'sl-actions' },
-                  h('p', { className: 'sl-status', role: 'status' }, t(kimi.configured ? 'toolsSharedCredential' : 'toolsNeedsCredential')),
-                  !kimi.configured && h('button', { type: 'button', onClick: () => {
-                    setPage('modelsPage'); modelsPageButton.current?.focus();
-                  } }, t('toolsConnect'))),
-                h('details', { className: 'sl-details' }, h('summary', null, t('billing')), h('div', null,
-                  h('p', { className: 'sl-muted' }, t('toolsCost')))))
+              ? [
+                ['kimiDatasource', 'kimi-coding', 'toolsTitle', 'toolsCost'],
+                ['grokXSearch', 'xai', 'grokToolsTitle', 'grokToolsCost'],
+              ].map(([id, providerId, title, cost]) => {
+                const provider = status.providers.find(provider => provider.id === providerId);
+                const tool = status.vendorTools?.[id];
+                return provider && h('article', { key: id, className: 'sl-card sl-data', 'aria-label': t(title) },
+                  h('header', null, h('h3', null, t(title)),
+                    h('span', { className: `sl-status sl-badge${tool?.enabled ? ' sl-saved' : ''}`, role: 'status' },
+                      t(!tool ? 'toolsUnknown' : tool.enabled ? 'toolsEnabled' : 'toolsDisabled'))),
+                  h('div', { className: 'sl-actions' },
+                    h('p', { className: 'sl-status', role: 'status' }, t(provider.configured ? 'toolsSharedCredential' : 'toolsNeedsCredential')),
+                    !provider.configured && h('button', { type: 'button', onClick: () => {
+                      setPage('modelsPage'); modelsPageButton.current?.focus();
+                    } }, t('toolsConnect'))),
+                  h('details', { className: 'sl-details' }, h('summary', null, t('billing')), h('div', null,
+                    h('p', { className: 'sl-muted' }, t(cost)))));
+              })
               : status.providers.map(provider => {
               const attempt = provider.attempt;
               const isRunning = attempt?.state === 'running';

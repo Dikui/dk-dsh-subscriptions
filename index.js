@@ -6,14 +6,17 @@ import { createAutoProxy } from './network.js';
 import { createAccountModels } from './models.js';
 import { accountModelSources } from './model-sources.js';
 import { createKimiTools } from './kimi-tools.js';
+import { createGrokSearchTool } from './grok-tools.js';
 import packageInfo from './package.json' with { type: 'json' };
 
 export const name = 'dk-subscriptions';
 export const inject = ['authorization', 'credentials', 'llm', 'connection', 'tools'];
 
-export async function apply(ctx, { kimiDatasource = false } = {}) {
+export async function apply(ctx, { kimiDatasource = false, grokXSearch = false } = {}) {
   if (typeof kimiDatasource !== 'boolean') throw new TypeError('kimiDatasource must be a boolean.');
+  if (typeof grokXSearch !== 'boolean') throw new TypeError('grokXSearch must be a boolean.');
   const kimiDatasourceStatus = Object.freeze({ enabled: kimiDatasource, reason: kimiDatasource ? null : 'NOT_ENABLED' });
+  const grokXSearchStatus = Object.freeze({ enabled: grokXSearch, reason: grokXSearch ? null : 'NOT_ENABLED' });
   // Resolve the exact pi-ai version shipped with the official adapter, not a
   // second transport/auth installation or a package copied into this bundle.
   const require = createRequire(import.meta.url);
@@ -97,7 +100,7 @@ export async function apply(ctx, { kimiDatasource = false } = {}) {
     describe: key => ctx.authorization.describe(key),
     begin: request => network.run(() => ctx.authorization.begin(request)),
   }, credentials: ctx.credentials, llm: ctx.llm, catalog, keyFor: recordKeyFor, accountModels,
-    vendorTools: { kimiDatasource: kimiDatasourceStatus } });
+    vendorTools: { kimiDatasource: kimiDatasourceStatus, grokXSearch: grokXSearchStatus } });
   ctx.connection.fetch.register({ path: '/api/subscriptions-lite', methods: ['GET', 'POST'],
     requestBody: 'buffered', fetch: createHttpHandler(api) });
   ctx.tools.register({
@@ -133,4 +136,10 @@ export async function apply(ctx, { kimiDatasource = false } = {}) {
     fetchTool: (url, options) => network.run(() => fetch(url, options)),
     attachments: () => ctx.get('attachments'),
   })) ctx.tools.register(tool);
+  ctx.tools.register(createGrokSearchTool({
+    enabled: grokXSearchStatus.enabled, signal: lifetime.signal,
+    getAuth: signal => network.run(() => authModels.getAuth('subscription-xai', { signal })),
+    fetchTool: (url, options) => network.run(() => fetch(url, options)),
+    attachments: () => ctx.get('attachments'),
+  }));
 }

@@ -10,7 +10,7 @@
 | Kimi | Kimi Code 订阅，模型目录仍来自本地 SDK，非通用网页会员接口 | `subscription-kimi-coding` |
 | Grok | 复用官方 SDK 的 xAI OAuth，模型目录来自本地 SDK | `subscription-xai` |
 
-代码接入不代表账户权益已验证。OpenAI 列表只包含账号接口标为可显示、且未标为禁止 API 使用的模型；它不是剩余额度或每次推理成功的保证。Kimi 和 Grok 的本地目录也不代表账号权限已验证。本项目不承诺官方背书，不提供虚构的余额或配额数据。Kimi Datasource 已完成独立工具适配，是否开放由插件配置决定；这不代表所有数据库权益已验证。其他游戏、网页搜索等产品工具不在范围内。
+代码接入不代表账户权益已验证。OpenAI 列表只包含账号接口标为可显示、且未标为禁止 API 使用的模型；它不是剩余额度或每次推理成功的保证。Kimi 和 Grok 的本地目录也不代表账号权限已验证。本项目不承诺官方背书，不提供虚构的余额或配额数据。Kimi Datasource 与 Grok X Search 已完成独立工具适配，是否开放由插件配置决定；这不代表所有数据库、搜索或账号权益已验证。其他游戏、通用网页搜索等产品工具不在范围内。
 
 Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses 传输，不另写 OAuth 或安装 CLI。xAI 已公开支持 [OpenCode](https://x.ai/news/grok-opencode) 及 [Grok Build/ACP](https://docs.x.ai/build/cli/headless-scripting)，但这不等于 DSH 客户端的授权适用范围已获确认。**不回退 API key 只能限制客户端认证方式，不能保证服务端不使用预付 credits 或产生额外收费。** 使用前应核对账号计费限制；面板测试会再次提示，真实授权及计费仍需用户另行验证。
 
@@ -36,6 +36,17 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 - 已接好现有共享 Kimi OAuth 与插件作用域代理。离线检查覆盖动态 API 参数、两种请求体、取消、错误脱敏及不重试；不读取 Kimi CLI 凭证，不安装或执行官方插件，不回退 API key，不冒充官方客户端。
 - 解析器将完整 JSON 响应存为宿主附件，只内联最多 16,000 个字符的文本预览并标记截断；嵌入的文件保留在 JSON 中，不自动解码或按上游路径写文件。当前请求上限 64 KiB、响应上限 32 MiB、网络与授权阶段最长 30 秒，附件存储不支持时拒绝发起查询。首版排除需要单独 `MP_API_KEY` 的 `materials_project`。
 - 第三方客户端细则、全部源权益与精确计费仍未知；启用不是厂商支持承诺。**包括说明查询在内，都可能扣套餐额度或 ExtraUsage 余额**，请明确授权后再调用。本项目始终使用真实名称与版本，不伪装成 Kimi Code。已取回 World Bank 的真实说明，修正 JSON 字符串解析后离线重放通过；实际取数、其他源与 GUI 端到端仍未验证。
+
+## Grok X Search（显式启用）
+
+独立工具 `grok_x_search` 可被任意主模型调用，复用共享 Grok OAuth、官方刷新锁和插件作用域代理；搜索仍需额外调用 Grok 推理，并非免费的原始搜索接口。实现见 [grok-tools.js](<grok-tools.js>)。
+
+- 无配置时默认关闭，返回 `GROK_X_SEARCH_DISABLED`，不读取凭证、不访问附件、不联网。本地 bundle 已按本次实现请求在 [cordis.patch.yml](<cordis.patch.yml>) 设置 `config.grokXSearch: true`；设置页和 `subscription_accounts` 共用 `vendorTools.grokXSearch`。已通过本地链接安装的旧进程需完全退出并重启 DSH；刷新页面不会替换已加载的宿主模块。
+- 参数为 `query`，可选 `model`（默认 `grok-4.7`）、互斥的 `allowed_x_handles` / `excluded_x_handles`（1–20 个、不含 @）、UTC 日期 `from_date`（含）/ `to_date`（不含），以及 `max_turns`（1–5，默认 2）。用户名与日期过滤不约束线程抓取。示例：**用 Grok X Search 搜索 @xai 关于 Grok 的公开帖子，最多一轮，附来源；我同意本次可能产生的推理及搜索费用。**
+- 只向 `https://api.x.ai/v1/responses` 发送 `tools: [{type: 'x_search'}]` 与 `tool_choice: 'required'`；禁用图片/视频理解，`store: false`，不自动重试、不回退 API key。SDK 的 `auth.apiKey` 字段可承载 OAuth access token，接入时仍强制验证 `source: 'OAuth'`，不是 API-key 认证回退。
+- 返回最多 16,000 字符正文、20 个去重来源 URL、服务端 token/抓取用量以及 `searched`、完成/截断状态。`searched: false` 代表未确认实际执行搜索；无结果不伪造来源。完整脱敏 JSON 作为附件保存，响应上限 8 MiB、授权及网络阶段最长 120 秒；附件服务不可用时拒绝发起收费请求。第三方帖子和模型摘要都是不可信数据，不是指令。
+- **OAuth 不保证仅扣订阅额度。** 目前官方计价为每 1,000 条抓取帖子 $5、每 1,000 个用户资料 $10，另加模型 token 费用。`max_turns` 限制循环轮次，不限制并行调用、抓取数量或总费用；1,024 个可见输出 token 上限也不包含推理/工具 token。调用前需获得费用授权。依据：[X Search](https://docs.x.ai/developers/tools/x-search)、[用量与轮次](https://docs.x.ai/developers/tools/tool-usage-details)、[定价](https://docs.x.ai/developers/pricing)。
+- 本次真实测试已确认当前账号 OAuth 可完成一次 X Search 调用，但返回 0 条帖子、无引用；不据此宣称帖子检索质量、其他模型或订阅专属计费已验证。
 
 ## 账号模型列表
 

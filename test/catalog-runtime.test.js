@@ -66,7 +66,7 @@ test('registered subscription routes preserve their native runtime contracts', {
       llm, connection: { fetch: { register() {} } }, tools: { register(value) { tools.set(value.name, value); } },
     });
     tool = tools.get('subscription_accounts');
-    assert.deepEqual([...tools.keys()].sort(), ['kimi_call_data_source_tool', 'kimi_get_data_source_desc', 'subscription_accounts']);
+    assert.deepEqual([...tools.keys()].sort(), ['grok_x_search', 'kimi_call_data_source_tool', 'kimi_get_data_source_desc', 'subscription_accounts']);
     const exec = { signal: new AbortController().signal };
     await t.test('Datasource gate prevents credential reads and transport even with a stored grant', async () => {
       records.set(native.recordKeyFor('kimi-coding'), { kind: 'grant', payload: {
@@ -79,6 +79,7 @@ test('registered subscription routes preserve their native runtime contracts', {
         for (const name of ['kimi_get_data_source_desc', 'kimi_call_data_source_tool']) {
           assert.deepEqual(await tools.get(name).execute({}, exec), { error: 'KIMI_DATASOURCE_DISABLED' });
         }
+        assert.deepEqual(await tools.get('grok_x_search').execute({}, exec), { error: 'GROK_X_SEARCH_DISABLED' });
         assert.equal(agent.getCallHistory().calls().length, before);
       } finally {
         credentials.readRecord = readRecord; credentials.modifyRecord = modifyRecord;
@@ -119,6 +120,48 @@ test('registered subscription routes preserve their native runtime contracts', {
         ['POST', 'https://api.kimi.com', '/coding/v1/tools'],
       ]);
       records.delete(native.recordKeyFor('kimi-coding'));
+      agent.clearCallHistory();
+    });
+    await t.test('explicit X Search opt-in uses native OAuth refresh and one X-only Responses request', async () => {
+      await assert.rejects(apply({}, { grokXSearch: 'true' }), /grokXSearch must be a boolean/);
+      const enabledTools = new Map(), saved = [], key = native.recordKeyFor('xai');
+      records.set(key, { kind: 'grant', payload: { type: 'oauth', access: 'SYNTHETIC-SEARCH-EXPIRED',
+        refresh: 'SYNTHETIC-SEARCH-REFRESH', expires: 0 } });
+      await apply({ credentials,
+        on(event, callback) { assert.equal(event, 'dispose'); dispose.push(callback); },
+        get: () => ({ async saveFile(value) { saved.push(value); return { attachmentId: 'SYNTHETIC-REF', name: value.name, bytes: value.data.length }; } }),
+        authorization: { describe: () => ({ methods: [{ id: 'oauth' }] }) },
+        llm: { registerAdapter() {}, emitAdaptersUpdated() {}, stream: () => assert.fail('X Search must be independent of main inference') },
+        connection: { fetch: { register() {} } }, tools: { register: value => enabledTools.set(value.name, value) },
+      }, { grokXSearch: true });
+      assert.deepEqual((await enabledTools.get('subscription_accounts').execute({ action: 'status' }, exec)).vendorTools.grokXSearch,
+        { enabled: true, reason: null });
+      assert.equal(agent.getCallHistory().calls().length, 0, 'status must not probe X Search');
+      agent.get('https://auth.x.ai').intercept({ method: 'POST', path: '/oauth2/token' }).reply(200, {
+        access_token: 'SYNTHETIC-SEARCH-ROTATED', refresh_token: 'SYNTHETIC-SEARCH-ROTATED-REFRESH', expires_in: 3600,
+      }, { headers: { 'content-type': 'application/json' } });
+      let body;
+      agent.get('https://api.x.ai').intercept({ method: 'POST', path: '/v1/responses',
+        headers: { authorization: 'Bearer SYNTHETIC-SEARCH-ROTATED' } }).reply(200, async request => {
+          body = JSON.parse(await new Response(request.body).text());
+          return { status: 'completed', output: [{ type: 'custom_tool_call', name: 'x_keyword_search' },
+            { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Synthetic X result',
+              annotations: [{ type: 'url_citation', url: 'https://x.com/xai/status/123' }] }] }] };
+        }, { headers: { 'content-type': 'application/json' } });
+      const result = await enabledTools.get('grok_x_search').execute({ query: 'Synthetic X query', max_turns: 1 }, exec);
+      assert.equal(result.text, 'Synthetic X result', JSON.stringify(result));
+      assert.deepEqual(result.citations, ['https://x.com/xai/status/123']);
+      assert.equal(saved.length, 1);
+      assert.equal(body.tool_choice, 'required');
+      assert.equal(body.tools.length, 1);
+      assert.equal(body.tools[0].type, 'x_search');
+      assert.equal(body.store, false);
+      assert.equal(body.stream, false);
+      assert.ok(!JSON.stringify(body).includes('SYNTHETIC-AMBIENT-PAID'));
+      assert.deepEqual(agent.getCallHistory().calls().map(call => [call.method, call.origin, call.path]), [
+        ['POST', 'https://auth.x.ai', '/oauth2/token'], ['POST', 'https://api.x.ai', '/v1/responses'],
+      ]);
+      records.delete(key);
       agent.clearCallHistory();
     });
     const vendors = [

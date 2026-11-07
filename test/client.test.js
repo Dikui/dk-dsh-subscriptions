@@ -84,7 +84,13 @@ test('client validates malformed endpoint data', () => {
   assert.ok(h.validStatus(state)); // A legacy backend has no tool metadata: display unknown, not enabled.
   for (const enabled of [false, true]) {
     state.vendorTools = { kimiDatasource: { enabled } };
+    assert.ok(h.validStatus(state)); // Older backends may provide Kimi metadata without Grok.
+    state.vendorTools.grokXSearch = { enabled: !enabled, reason: enabled ? 'NOT_ENABLED' : null };
     assert.ok(h.validStatus(state));
+  }
+  for (const grokXSearch of [undefined, null, [], false, {}, { enabled: 'true', reason: null }, { enabled: true }, { enabled: true, reason: 'DENIED' }]) {
+    state.vendorTools = { kimiDatasource: { enabled: true }, grokXSearch };
+    assert.equal(h.validStatus(state), false);
   }
   for (const vendorTools of [null, [], {}, { kimiDatasource: null }, { kimiDatasource: { enabled: 'true' } }]) {
     state.vendorTools = vendorTools;
