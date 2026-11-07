@@ -82,6 +82,19 @@ test('A device-start failure closes only the waiting tab and explains the missin
   } finally { panel.dispose(); }
 });
 
+test('OpenAI region rejection explains the backend network setting in both languages', async () => {
+  for (const language of ['en', 'zh']) {
+    const state = initialStatus();
+    state.providers[0].attempt = { id: 'failed-openai', state: 'failed', notices: [], prompt: null, error: 'OAUTH_REGION_UNSUPPORTED' };
+    const panel = await panelHarness({ language, fetch: async () => Response.json(state) });
+    try {
+      assert.match(panel.text(), /HTTPS_PROXY/);
+      assert.match(panel.text(), language === 'en' ? /country or region/ : /国家或地区/);
+      assert.doesNotMatch(panel.text(), /The request did not complete|请求未完成/);
+    } finally { panel.dispose(); }
+  }
+});
+
 test('Untrusted authorization URLs never navigate or enter the copy fallback', async () => {
   const server = flowServer(); let navigated = false, closed = false;
   const popup = makePopup(() => { navigated = true; }); popup.close = () => { closed = true; popup.closed = true; };
@@ -163,4 +176,48 @@ test('Reopening the panel resumes a pending device flow without launching a tab 
     assert.ok(panel.button('Cancel authorization'));
     assert.equal(opens, 0);
   } finally { panel.dispose(); }
+});
+
+// small/spec — account model-list request: metadata refresh must not invoke inference.
+test('account model refresh replaces any registered vendor’s names without a model test', async () => {
+  // The Kimi account capability here is synthetic, not a production endpoint claim.
+  for (const [id, title] of [['openai-codex', 'OpenAI · ChatGPT'], ['kimi-coding', 'Kimi Code']]) {
+    const state = initialStatus(), calls = [], account = state.providers.find(provider => provider.id === id);
+    account.configured = true; account.credentialKind = 'grant';
+    account.models = [{ id: 'server-only', name: 'Server Model' }];
+    account.modelCatalog = { source: 'account', state: 'ready', error: null, updatedAt: 1 };
+    const panel = await panelHarness({ fetch: async (_url, options = {}) => {
+      if (options.method === 'POST') {
+        calls.push(JSON.parse(options.body));
+        account.models = [{ id: 'server-new', name: 'New Server Model' }];
+        return Response.json({ ok: true });
+      }
+      return Response.json(state);
+    } });
+    try {
+      const card = () => panel.within(title);
+      assert.equal(card().find(node => node.type === 'select').props.value, 'server-only');
+      await panel.click('Refresh account models · no inference quota', title);
+      assert.equal(card().find(node => node.type === 'select').props.value, 'server-new');
+      assert.deepEqual(card().filter(node => node.type === 'option').map(node => node.props.value), ['server-new']);
+      assert.deepEqual(calls, [{ provider: id, action: 'models' }]);
+    } finally { panel.dispose(); }
+  }
+});
+
+test('failed account discovery shows no static names and disables inference testing', async () => {
+  for (const language of ['en', 'zh']) {
+    const state = initialStatus(), account = state.providers[0];
+    account.configured = true; account.credentialKind = 'grant';
+    account.modelCatalog = { source: 'account', state: 'error', error: 'MODEL_CATALOG_DENIED', updatedAt: null };
+    const panel = await panelHarness({ language, fetch: async () => Response.json(state) });
+    try {
+      const card = panel.within('OpenAI · ChatGPT');
+      assert.equal(card.find(node => node.type === 'select').props.disabled, true);
+      assert.ok(card.some(node => node.props.role === 'alert'));
+      assert.match(panel.text(), /401\/403/);
+      assert.equal(panel.button(language === 'en' ? 'Test selected model · uses quota' : '测试所选模型 · 消耗额度', 'OpenAI · ChatGPT').props.disabled, true);
+      assert.ok(!panel.text().includes('GPT-5.3 Codex Spark'));
+    } finally { panel.dispose(); }
+  }
 });

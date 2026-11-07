@@ -24,6 +24,84 @@ function fixture(begin) {
 }
 const turn = () => new Promise(resolve => setImmediate(resolve));
 
+// small/regression — account discovery must feed status, routes and test validation.
+test('account model discovery is shared instead of advertising the static baseline', async () => {
+  const f = fixture(); f.records.set(keyFor('openai-codex'), grant());
+  let models = catalog[0].getModels();
+  const remoteCatalog = [{ ...catalog[0], getModels: () => models }, ...catalog.slice(1)];
+  const accountModels = {
+    async ensure() { models = [{ ...models[0], id: 'server-only-model', name: 'Account Model' }]; },
+    getModels: () => models,
+    status: () => ({ source: 'account', state: 'ready', error: null, updatedAt: 1 }),
+    clear() { models = []; },
+  };
+  const api = createSubscriptions({ authorization: f.authorization, credentials: f.credentials, keyFor,
+    catalog: remoteCatalog, accountModels: new Map([['openai-codex', accountModels]]),
+    llm: { async *stream(args) { f.calls.push(args); yield { type: 'text-delta', text: '2' }; yield { type: 'finish', reason: { kind: 'stop' } }; } },
+  });
+  const state = await api.status();
+  assert.deepEqual(state.providers[0].models, [{ id: 'server-only-model', name: 'Account Model' }]);
+  assert.equal(state.providers[0].modelCatalog.source, 'account');
+  const bindings = subscriptionBindings(f.credentials, remoteCatalog, keyFor);
+  assert.equal(bindings.profiles().get('subscription-openai-codex').piProvider.getModels()[0].id, 'server-only-model');
+  await assert.rejects(api.test('openai-codex', 'model-1'), { code: 'UNKNOWN_MODEL' });
+  await api.test('openai-codex', 'server-only-model');
+  assert.equal(f.calls[0].model, 'server-only-model');
+  api.dispose();
+});
+
+test('account metadata refresh is available without sending an inference request', async () => {
+  const f = fixture(); f.records.set(keyFor('openai-codex'), grant());
+  let forced = false;
+  const api = createSubscriptions({ authorization: f.authorization, credentials: f.credentials, llm: { stream: () => assert.fail('metadata refresh must not infer') }, catalog, keyFor,
+    accountModels: new Map([['openai-codex', { ensure: async options => { forced = options.force; }, clear() {}, status: () => ({ source: 'account', state: 'ready', error: null, updatedAt: 1 }) }]]),
+  });
+  const request = new Request('http://localhost/api/subscriptions-lite', { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Subscriptions-Lite': '1' },
+    body: JSON.stringify({ action: 'models', provider: 'openai-codex' }),
+  });
+  const response = await createHttpHandler(api)(request);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { ok: true });
+  assert.equal(forced, true);
+  api.dispose();
+});
+
+// small/spec — both registered sources use synthetic metadata and no inference transport.
+test('registered vendors share model refresh and clear only their own discovery state', async () => {
+  const f = fixture();
+  const accountModels = new Map();
+  const remote = catalog.map(native => {
+    let models = [], queried = 0;
+    if (native.id === 'xai') return native;
+    f.records.set(keyFor(native.id), grant());
+    accountModels.set(native.id, {
+      async ensure({ force } = {}) {
+        if (!queried || force) queried++;
+        models = [{ id: `${native.id}-${queried}`, name: `${native.id} account model`, provider: native.id }];
+      },
+      getModels: () => models,
+      status: () => ({ source: 'account', state: 'ready', error: null, updatedAt: 1 }),
+      clear() { models = []; },
+    });
+    return { ...native, getModels: () => models };
+  });
+  const api = createSubscriptions({ authorization: f.authorization, credentials: f.credentials,
+    llm: { stream: () => assert.fail('metadata must not infer') }, catalog: remote, keyFor, accountModels });
+  try {
+    const state = await api.status();
+    assert.deepEqual(state.providers.slice(0, 2).map(provider => provider.models[0]?.id), ['openai-codex-1', 'kimi-coding-1']);
+    assert.ok(state.providers.slice(0, 2).every(provider => provider.modelCatalog.source === 'account'));
+    await api.refreshModels('kimi-coding');
+    assert.equal(accountModels.get('kimi-coding').getModels()[0].id, 'kimi-coding-2');
+    assert.equal(accountModels.get('openai-codex').getModels()[0].id, 'openai-codex-1');
+    await api.logout('kimi-coding');
+    assert.deepEqual(accountModels.get('kimi-coding').getModels(), []);
+    assert.equal(accountModels.get('openai-codex').getModels()[0].id, 'openai-codex-1');
+  } finally { api.dispose(); }
+  await assert.rejects(f.api.refreshModels('kimi-coding'), { code: 'MODEL_CATALOG_UNAVAILABLE' });
+});
+
 test('OAuth validation rejects API keys and malformed grants', () => {
   assert.ok(oauthRecord(grant()));
   for (const value of [undefined, { kind: 'api-key', key: 'SECRET' }, { kind: 'grant', payload: { type: 'oauth', access: 'x' } }, { kind: 'grant', payload: { type: 'api_key', key: 'x' } }]) assert.equal(oauthRecord(value), undefined);
@@ -116,6 +194,27 @@ test('errors and unsafe notice links are not leaked', async () => {
   const p = (await f.api.status()).providers[0];
   assert.equal(p.attempt.state, 'failed'); assert.equal(p.attempt.notices[0].url, undefined);
   assert.doesNotMatch(JSON.stringify(p), /REFRESH-SECRET/);
+});
+test('official OAuth failures retain actionable categories without exposing token responses', async () => {
+  const cases = [
+    ['OpenAI Codex token exchange failed (403): {"error":{"code":"unsupported_country_region_territory"},"access_token":"SECRET"}', 'OAUTH_REGION_UNSUPPORTED'],
+    ['OpenAI Codex token exchange failed (400): {"error":"invalid_grant","refresh_token":"SECRET"}', 'OAUTH_EXCHANGE_FAILED'],
+    ['OpenAI Codex token exchange response missing fields: {"access_token":"SECRET"}', 'OAUTH_EXCHANGE_FAILED'],
+    ['State mismatch', 'OAUTH_CALLBACK_MISMATCH'],
+    ['Missing authorization code', 'OAUTH_CALLBACK_MISMATCH'],
+    ['Failed to extract accountId from token', 'OAUTH_ACCOUNT_INVALID'],
+    ['fetch failed', 'NETWORK_FAILED'],
+    ['Other failure SECRET', 'REQUEST_FAILED'],
+  ];
+  for (const [message, code] of cases) {
+    const f = fixture(async () => { throw new Error(message); });
+    f.api.login('openai-codex'); await turn();
+    const state = await f.api.status();
+    assert.equal(state.providers[0].attempt.error, code);
+    assert.doesNotMatch(JSON.stringify(state), /SECRET|access_token|refresh_token/);
+  }
+  assert.equal(safeError(Object.assign(new Error('SECRET'), { code: 'NOT_COMMITTED' })).error, 'NOT_COMMITTED');
+  assert.equal(safeError(Object.assign(new Error('SECRET'), { code: 'SECRET' })).error, 'REQUEST_FAILED');
 });
 test('test requires OAuth and exact catalog model; dispatch uses isolated route', async () => {
   const f = fixture();

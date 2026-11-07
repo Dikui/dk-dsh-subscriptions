@@ -10,11 +10,19 @@ window.__ModuleLoader__.load({
         close: 'Close', loading: 'Loading subscriptions…', retry: 'Retry', connect: 'Connect', reconnect: 'Reconnect', cancel: 'Cancel authorization', logout: 'Remove credential',
         saved: 'Credential saved · entitlement not verified', missing: 'No subscription credential saved', apiKey: 'An API key exists; it is not a subscription credential.', unavailable: 'Unavailable',
         running: 'Waiting for authorization', authorized: 'Authorization finished', cancelled: 'Stopped waiting. A pending credential save may still finish; remove it if it appears.', failed: 'Authorization failed',
-        openai: 'Uses the installed OpenAI Codex adapter. Its legacy local model catalog may not match current ChatGPT plan access.',
+        openai: 'Uses the official subscription credential to fetch your account’s selectable OpenAI models. The SDK’s static model list is not used as account availability.',
         kimi: 'Kimi Coding membership only. Kimi web, finance, and game services are not included.',
         xai: 'Direct Grok OAuth authorization in DSH is not confirmed. Connecting is disabled.',
         grokNews: 'Grok and OpenCode', grokDocs: 'Official headless scripting docs',
-        model: 'Local model catalog', noModels: 'No local models available', catalog: 'A listed model is not proof of paid access. No remaining-quota data is available here.',
+        model: 'Local model catalog', noModels: 'No local models available', catalog: 'This is the installed SDK’s local catalog, not an account-discovered availability list. It does not prove access or remaining quota.',
+        accountModels: 'Account model list', accountNoModels: 'No selectable account models loaded', accountCatalog: 'Returned by the account model endpoint, not a static SDK list. This is not a remaining-quota or request-success guarantee.',
+        refreshModels: 'Refresh account models · no inference quota', refreshingModels: 'Refreshing account models…',
+        catalogError: 'Could not fetch the account model list. Check the backend network, then refresh. No static model names were substituted.',
+        catalogDenied: 'The account model endpoint rejected this credential or connection (HTTP 401/403). Check authorization and the backend network, then refresh.',
+        catalogInvalid: 'The account model endpoint returned an unsupported response. No static model names were substituted.',
+        catalogRateLimit: 'Account model discovery was rate limited. Wait before refreshing; no inference request was sent.',
+        catalogChanged: 'The credential changed during discovery. Refresh the account model list.',
+        catalogUnavailable: 'This provider has no registered account model source. A local SDK catalog is not proof of account availability.',
         test: 'Test selected model · uses quota', testing: 'Testing…', testResult: 'Test response',
         testConfirm: 'Send one real request with the selected model? This consumes subscription quota.',
         logoutConfirm: 'Clear the shared OAuth secrets, leaving a secret-free signed-out marker? Other DSH features using this same credential will also lose access.',
@@ -26,26 +34,40 @@ window.__ModuleLoader__.load({
         authorizationLink: 'Official authorization link', copyLink: 'Copy authorization link', copyCode: 'Copy code',
         copied: 'Copied', copyHelp: 'Clipboard access failed. Select and copy the text above manually.',
         resumed: 'This authorization is already running. Continue with the link and code below, or cancel to start again.',
-        noAuthLink: 'No authorization link was received. Check that this computer can reach the provider, then reconnect. No API-key fallback was used.',
+        noAuthLink: 'No authorization link was received. Resolve the error above, then reconnect. No API-key fallback was used.',
         authHelp: 'Sign in on the official provider site yourself. Never enter your account password here; submit only the requested authorization response.',
         foreign: 'Authorization is running in another panel. Finish or cancel it there.', unsafeLink: 'This authorization link is not on a verified HTTPS host and cannot be opened here.',
         requestError: 'The request did not complete. Check authorization and retry.', badResponse: 'The server returned an unexpected response.',
         unavailableError: 'This provider does not support subscription authorization in this DSH installation.',
         inFlightError: 'An authorization or test is already running. Wait for it to finish.', staleError: 'This authorization step expired. Refresh and connect again.',
-        missingError: 'Connect a subscription credential first.', modelError: 'This model is no longer in the local catalog. Refresh and select another.',
+        missingError: 'Connect a subscription credential first.', modelError: 'This model is not in the current model list. Refresh and select another.',
         credentialError: 'The shared record is not a subscription credential; it was not deleted.', answerError: 'Enter a valid answer for the current authorization prompt.',
         testError: 'The model test failed. A saved credential does not guarantee access to this model.',
+        regionError: 'OpenAI rejected the country or region of the DSH backend connection (HTTP 403). Check DSH’s HTTPS_PROXY setting and supported-region access; browser access alone does not verify the backend network. On macOS this plugin reads the system HTTPS proxy when loaded; explicit proxy variables win. Restart DSH after changing those settings.',
+        exchangeError: 'The authorization code could not be exchanged for a token. Start a new authorization; if it fails again, check the DSH backend network and proxy settings.',
+        callbackError: 'The callback does not match this authorization or has no code. Start a new authorization and use its latest callback.',
+        accountError: 'The official adapter could not read the account ID from the returned token. Check the installed adapter version before retrying.',
+        networkError: 'The DSH backend could not reach the provider. Check its network and proxy settings; the browser may use a different connection.',
+        saveError: 'The authorization flow finished without saving a usable credential. Reconnect; if it repeats, check the official adapter and credential service.',
       },
       zh: {
         title: 'dsh-dk-subscriptions', description: '通过官方授权流程连接已有的编程订阅。',
         close: '关闭', loading: '正在加载订阅…', retry: '重试', connect: '连接', reconnect: '重新连接', cancel: '取消授权', logout: '移除凭证',
         saved: '凭证已保存 · 订阅权益未验证', missing: '尚未保存订阅凭证', apiKey: '存在 API 密钥，但它不是订阅凭证。', unavailable: '暂不可用',
         running: '等待授权', authorized: '授权已完成', cancelled: '已停止等待。进行中的凭证保存可能仍会完成；如出现凭证，请移除。', failed: '授权失败',
-        openai: '使用已安装的 OpenAI Codex 适配器。其旧版本地模型目录可能与当前 ChatGPT 套餐权限不一致。',
+        openai: '使用官方订阅凭证获取当前账号可选择的 OpenAI 模型，不再把 SDK 静态目录当作账号可用列表。',
         kimi: '仅支持 Kimi Coding 会员，不包含 Kimi 网页、金融或游戏服务。',
         xai: '尚未确认 DSH 能直接进行 Grok OAuth 授权，因此暂不支持连接。',
         grokNews: 'Grok 与 OpenCode', grokDocs: '官方无头脚本文档',
-        model: '本地模型目录', noModels: '暂无本地模型', catalog: '模型在列表中不代表拥有付费访问权限。此处不提供剩余额度数据。',
+        model: '本地模型目录', noModels: '暂无本地模型', catalog: '这是已安装 SDK 的本地目录，不是账号接口返回的可用列表；不代表访问权限或剩余额度。',
+        accountModels: '账号模型列表', accountNoModels: '尚未加载可选择的账号模型', accountCatalog: '来自账号模型接口，不是 SDK 静态目录；不代表剩余额度，也不保证每次调用成功。',
+        refreshModels: '刷新账号模型 · 不消耗推理额度', refreshingModels: '正在刷新账号模型…',
+        catalogError: '未能获取账号模型列表。请检查后台网络后刷新；没有使用静态模型名称代替。',
+        catalogDenied: '账号模型接口拒绝了此凭证或连接（HTTP 401/403）。请检查授权和后台网络后刷新。',
+        catalogInvalid: '账号模型接口返回了无法支持的数据，没有使用静态模型名称代替。',
+        catalogRateLimit: '账号模型查询被限流，请稍后刷新；未发送推理请求。',
+        catalogChanged: '查询期间凭证发生变化，请刷新账号模型列表。',
+        catalogUnavailable: '此厂商尚未接入账号模型查询；本地 SDK 目录不代表账号可用模型。',
         test: '测试所选模型 · 消耗额度', testing: '正在测试…', testResult: '测试回复',
         testConfirm: '使用所选模型发送一次真实请求？这会消耗订阅额度。',
         logoutConfirm: '清除与官方提供商共用的 OAuth 密钥，仅保留不含密钥的退出标记？其他使用同一凭证的 DSH 功能也将失去访问权限。',
@@ -57,21 +79,32 @@ window.__ModuleLoader__.load({
         authorizationLink: '官方授权链接', copyLink: '复制授权链接', copyCode: '复制授权码',
         copied: '已复制', copyHelp: '无法写入剪贴板，请选中上方文本手动复制。',
         resumed: '此授权正在进行，可以使用下方链接和授权码继续，也可以取消后重新连接。',
-        noAuthLink: '尚未取得授权链接。请检查本机能否访问提供商后重新连接；没有改用 API 密钥。',
+        noAuthLink: '尚未取得授权链接。请根据上方错误处理后重新连接；没有改用 API 密钥。',
         authHelp: '请自行在提供商的官方网站登录。不要在此输入账号密码，仅提交授权流程要求的回答。',
         foreign: '其他面板正在进行授权，请在原面板完成或取消。', unsafeLink: '此授权链接不属于已验证的 HTTPS 域名，无法在此打开。',
         requestError: '请求未完成，请检查授权后重试。', badResponse: '服务器返回了无法识别的数据。',
         unavailableError: '当前 DSH 安装中的此提供商不支持订阅授权。',
         inFlightError: '已有授权或测试正在进行，请等待完成。', staleError: '此授权步骤已过期，请刷新后重新连接。',
-        missingError: '请先连接订阅凭证。', modelError: '此模型已不在本地目录中，请刷新后重新选择。',
+        missingError: '请先连接订阅凭证。', modelError: '此模型不在当前模型列表中，请刷新后重新选择。',
         credentialError: '共用记录不是订阅凭证，未执行删除。', answerError: '请为当前授权问题填写有效回答。',
         testError: '模型测试失败。已保存凭证不代表有权访问此模型。',
+        regionError: 'OpenAI 拒绝了 DSH 后台连接所在的国家或地区（HTTP 403）。请检查 DSH 的 HTTPS_PROXY 配置及支持地区；浏览器能访问不代表后台网络正常。本插件在 macOS 上加载时会读取系统 HTTPS 代理，显式代理环境变量优先；修改设置后请重启 DSH。',
+        exchangeError: '授权码换取令牌失败。请重新发起授权；如果再次失败，请检查 DSH 后台的网络和代理配置。',
+        callbackError: '回调与本次授权不匹配，或缺少授权码。请重新发起授权，并使用本次最新的回调。',
+        accountError: '官方适配器无法从返回的令牌中读取账号 ID。请检查已安装的适配器版本后再重试。',
+        networkError: 'DSH 后台无法连接提供商。请检查后台的网络和代理配置；浏览器可能使用了不同的连接。',
+        saveError: '授权流程结束，但未保存有效凭证。请重新连接；若再次出现，请检查官方适配器和凭证服务。',
       },
     };
     const errorKeys = {
       BAD_RESPONSE: 'badResponse', UNAVAILABLE: 'unavailableError', ALREADY_IN_FLIGHT: 'inFlightError', TEST_IN_PROGRESS: 'inFlightError',
       STALE_ATTEMPT: 'staleError', STALE_PROMPT: 'staleError', MISSING_CREDENTIAL: 'missingError', UNKNOWN_MODEL: 'modelError',
       NOT_SUBSCRIPTION_CREDENTIAL: 'credentialError', INVALID_ANSWER: 'answerError', TEST_FAILED: 'testError',
+      NO_FLOW: 'unavailableError', UNKNOWN_METHOD: 'unavailableError', NOT_COMMITTED: 'saveError',
+      OAUTH_REGION_UNSUPPORTED: 'regionError', OAUTH_EXCHANGE_FAILED: 'exchangeError',
+      OAUTH_CALLBACK_MISMATCH: 'callbackError', OAUTH_ACCOUNT_INVALID: 'accountError', NETWORK_FAILED: 'networkError',
+      MODEL_CATALOG_FAILED: 'catalogError', MODEL_CATALOG_DENIED: 'catalogDenied', MODEL_CATALOG_INVALID: 'catalogInvalid',
+      MODEL_CATALOG_RATE_LIMIT: 'catalogRateLimit', MODEL_CATALOG_CHANGED: 'catalogChanged', MODEL_CATALOG_UNAVAILABLE: 'catalogUnavailable',
     };
     const providerNotes = { 'openai-codex': 'openai', 'kimi-coding': 'kimi', xai: 'xai' };
     // Kimi's device-code API and browser verification page use different hosts.
@@ -99,6 +132,12 @@ window.__ModuleLoader__.load({
           && (p.route === null || typeof p.route === 'string') && typeof p.available === 'boolean' && typeof p.configured === 'boolean'
           && [null, 'grant', 'api-key'].includes(p.credentialKind) && Array.isArray(p.models)
           && p.models.every(m => m && typeof m.id === 'string' && typeof m.name === 'string')
+          && p.modelCatalog && ['account', 'local', 'none'].includes(p.modelCatalog.source)
+          && ['unloaded', 'loading', 'ready', 'error', 'unavailable'].includes(p.modelCatalog.state)
+          && (p.modelCatalog.error === null || typeof p.modelCatalog.error === 'string')
+          && (p.modelCatalog.updatedAt === null || (Number.isFinite(p.modelCatalog.updatedAt) && p.modelCatalog.updatedAt >= 0))
+          && (p.id !== 'openai-codex' || p.modelCatalog.source === 'account')
+          && (p.modelCatalog.source !== 'account' || (p.configured && p.modelCatalog.state === 'ready') || !p.models.length)
           && (p.attempt === null || validAttempt(p.attempt)));
     }
     async function request(body, signal, keepalive = false) {
@@ -341,6 +380,7 @@ window.__ModuleLoader__.load({
               const model = provider.models.some(m => m.id === models[provider.id]) ? models[provider.id] : (provider.models[0]?.id || '');
               const disabled = !!busy[provider.id];
               const result = results[provider.id];
+              const accountCatalog = provider.modelCatalog.source === 'account';
               return h('article', { key: provider.id, className: 'sl-card', 'aria-label': provider.name },
                 h('header', null, h('h3', null, provider.name), h('span', { className: `sl-status${provider.configured ? ' sl-saved' : ''}`, role: 'status' },
                   t(!provider.available ? 'unavailable' : provider.configured ? 'saved' : 'missing'))),
@@ -355,13 +395,17 @@ window.__ModuleLoader__.load({
                   } }, t('logout'))),
                 provider.id === 'xai' && h('div', { className: 'sl-actions' }, link('https://x.ai/news/grok-opencode', t('grokNews')), link('https://docs.x.ai/build/cli/headless-scripting', t('grokDocs'))),
                 provider.available && h(React.Fragment, null,
-                  h('div', { className: 'sl-model' }, h('label', null, t('model'),
+                  accountCatalog && provider.configured && h('button', { type: 'button', disabled: disabled || isRunning,
+                    onClick: () => run(provider.id, 'models') }, t(busy[provider.id] === 'models' ? 'refreshingModels' : 'refreshModels')),
+                  provider.modelCatalog.error && provider.modelCatalog.error !== result?.error
+                    && h('p', { className: 'sl-error', role: 'alert' }, errorText(provider.modelCatalog.error)),
+                  h('div', { className: 'sl-model' }, h('label', null, t(accountCatalog ? 'accountModels' : 'model'),
                     h('select', { value: model, disabled: disabled || isRunning || !provider.models.length, onChange: event => setModels(previous => ({ ...previous, [provider.id]: event.target.value })) },
-                      !provider.models.length && h('option', { value: '' }, t('noModels')), provider.models.map(item => h('option', { key: item.id, value: item.id }, item.name)))),
+                      !provider.models.length && h('option', { value: '' }, t(accountCatalog ? 'accountNoModels' : 'noModels')), provider.models.map(item => h('option', { key: item.id, value: item.id }, item.name)))),
                   h('button', { type: 'button', disabled: disabled || isRunning || !provider.configured || !model, onClick: () => {
                     if (window.confirm(`${t('testConfirm')}\n${model}`)) run(provider.id, 'test', { model });
                   } }, t(busy[provider.id] === 'test' ? 'testing' : 'test'))),
-                  h('p', { className: 'sl-muted' }, t('catalog'))),
+                  h('p', { className: 'sl-muted' }, t(accountCatalog ? 'accountCatalog' : 'catalog'))),
                 attempt && h('div', { className: 'sl-flow' },
                   h('p', { role: 'status' }, t(attempt.state)),
                   attempt.error && h('p', { className: 'sl-error', role: 'alert' }, errorText(attempt.error)),

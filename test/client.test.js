@@ -74,3 +74,13 @@ test('client validates malformed endpoint data', () => {
   const { helpers: h } = loadClient();
   for (const data of [null, {}, { providers: [] }, { providers: [{ id: '__proto__' }] }]) assert.ok(!h.validStatus(data));
 });
+
+test('OpenAI status rejects a local baseline or stale names after discovery failure', () => {
+  const { helpers: h } = loadClient();
+  const state = initialStatus(), account = state.providers[0];
+  account.modelCatalog.source = 'local';
+  assert.equal(h.validStatus(state), false);
+  account.modelCatalog.source = 'account'; account.modelCatalog.state = 'error';
+  account.models = [{ id: 'static-spark', name: 'Static Spark' }];
+  assert.equal(h.validStatus(state), false);
+});

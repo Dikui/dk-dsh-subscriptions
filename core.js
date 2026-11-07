@@ -11,8 +11,23 @@ export class SubscriptionError extends Error {
 }
 export function fail(code) { throw new SubscriptionError(code); }
 export function safeError(error) {
-  return { error: error instanceof SubscriptionError ? error.code : 'REQUEST_FAILED',
-    message: 'The subscription operation did not complete. Check authorization and retry.' };
+  let code = error instanceof SubscriptionError ? error.code : 'REQUEST_FAILED';
+  if (!(error instanceof SubscriptionError)) {
+    // Upstream errors can embed token responses. Classify, never return their text.
+    const message = typeof error?.message === 'string' ? error.message : '';
+    const exchange = /^OpenAI Codex token exchange failed \((\d{3})\): ([\s\S]*)$/.exec(message);
+    if (['NO_FLOW', 'UNKNOWN_METHOD', 'ALREADY_IN_FLIGHT', 'NOT_COMMITTED'].includes(error?.code)) code = error.code;
+    else if (exchange) {
+      code = 'OAUTH_EXCHANGE_FAILED';
+      try {
+        if (exchange[1] === '403' && JSON.parse(exchange[2])?.error?.code === 'unsupported_country_region_territory') code = 'OAUTH_REGION_UNSUPPORTED';
+      } catch { /* A non-JSON response is still an exchange failure. */ }
+    } else if (message.startsWith('OpenAI Codex token exchange response missing fields:')) code = 'OAUTH_EXCHANGE_FAILED';
+    else if (['State mismatch', 'Missing authorization code'].includes(message)) code = 'OAUTH_CALLBACK_MISMATCH';
+    else if (message === 'Failed to extract accountId from token') code = 'OAUTH_ACCOUNT_INVALID';
+    else if (message === 'fetch failed') code = 'NETWORK_FAILED';
+  }
+  return { error: code, message: 'The subscription operation did not complete. Check authorization and retry.' };
 }
 export function oauthRecord(record) {
   const grant = record?.kind === 'grant' ? record.payload : undefined;
@@ -94,7 +109,7 @@ function safeNotice(notice) {
   return result;
 }
 
-export function createSubscriptions({ authorization, credentials, llm, catalog, keyFor, timeoutMs = 15 * 60 * 1000 }) {
+export function createSubscriptions({ authorization, credentials, llm, catalog, keyFor, accountModels = new Map(), timeoutMs = 15 * 60 * 1000 }) {
   const attempts = new Map();
   const tests = new Map();
   const loggingOut = new Set();
@@ -131,16 +146,43 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
       attempt.controller.signal.addEventListener('abort', cancel, { once: true });
     });
   }
-  async function status() {
+  async function ensureModels(id, options) {
+    if (!accountModels.has(id)) return;
+    const models = accountModels.get(id);
+    if (!models) fail('MODEL_CATALOG_UNAVAILABLE');
+    await models.ensure(options);
+  }
+  async function status(signal) {
     return { providers: await Promise.all(PROVIDERS.map(async p => {
-      if (!p.route || !supported.has(p.id)) return { ...p, available: false, configured: false, credentialKind: null, models: [], attempt: null };
+      if (!p.route || !supported.has(p.id)) return { ...p, available: false, configured: false, credentialKind: null, models: [],
+        modelCatalog: { source: 'none', state: 'unavailable', error: null, updatedAt: null }, attempt: null };
       const record = await credentials.readRecord(keyFor(p.id));
       const flow = authorization.describe(keyFor(p.id));
+      let modelCatalog = { source: 'local', state: 'ready', error: null, updatedAt: null };
+      if (accountModels.has(p.id)) {
+        const models = accountModels.get(p.id);
+        if (!oauthRecord(record)) models?.clear();
+        let error;
+        if (oauthRecord(record) && attempts.get(p.id)?.state !== 'running' && !loggingOut.has(p.id)) {
+          try { await ensureModels(p.id, { signal }); } catch (cause) { error = safeError(cause).error; }
+        }
+        modelCatalog = models?.status() ?? { source: 'account', state: 'unloaded', error: null, updatedAt: null };
+        if (error) modelCatalog = { source: 'account', state: 'error', error, updatedAt: null };
+      }
+      const showModels = modelCatalog.source !== 'account' || (oauthRecord(record) && modelCatalog.state === 'ready' && attempts.get(p.id)?.state !== 'running');
       return { ...p, available: !!flow?.methods.some(method => method.id === 'oauth'),
         configured: !!oauthRecord(record), credentialKind: record?.kind ?? null,
-        models: catalog.find(item => item.id === p.id).getModels().map(({ id, name }) => ({ id, name })),
-        attempt: publicAttempt(attempts.get(p.id)) };
+        models: showModels ? catalog.find(item => item.id === p.id).getModels().map(({ id, name }) => ({ id, name })) : [],
+        modelCatalog, attempt: publicAttempt(attempts.get(p.id)) };
     })) };
+  }
+  async function refreshModels(id, signal) {
+    provider(id);
+    if (!accountModels.has(id)) fail('MODEL_CATALOG_UNAVAILABLE');
+    if (loggingOut.has(id) || tests.has(id) || attempts.get(id)?.state === 'running') fail('ALREADY_IN_FLIGHT');
+    if (!oauthRecord(await credentials.readRecord(keyFor(id)))) fail('MISSING_CREDENTIAL');
+    await ensureModels(id, { force: true, signal });
+    return { ok: true };
   }
   function login(id) {
     provider(id);
@@ -151,6 +193,7 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     if (tests.has(id)) fail('TEST_IN_PROGRESS');
     const attempt = { id: randomUUID(), state: 'running', notices: [], prompt: null, controller: new AbortController() };
     attempts.set(id, attempt);
+    accountModels.get(id)?.clear();
     const timer = setTimeout(() => attempt.controller.abort(), timeoutMs);
     timer.unref?.();
     attempt.done = Promise.resolve().then(() => authorization.begin({
@@ -161,6 +204,7 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
       },
     })).then(outcome => {
       attempt.state = outcome.status === 'authorized' ? 'authorized' : 'cancelled';
+      accountModels.get(id)?.clear();
     }).catch(error => {
       attempt.state = attempt.controller.signal.aborted ? 'cancelled' : 'failed';
       attempt.error = safeError(error).error;
@@ -202,6 +246,7 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
         return { kind: 'grant', payload: { type: 'subscription-revoked' } };
       });
       if (attempts.get(id) === attempt) attempts.delete(id);
+      accountModels.get(id)?.clear();
       return { ok: true };
     } finally { loggingOut.delete(id); }
   }
@@ -212,11 +257,13 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     const controller = new AbortController();
     tests.set(id, controller);
     try {
+      const requestSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(60000), ...(signal ? [signal] : [])]);
       if (!oauthRecord(await credentials.readRecord(keyFor(id)))) fail('MISSING_CREDENTIAL');
+      await ensureModels(id, { signal: requestSignal });
+      requestSignal.throwIfAborted();
       const models = catalog.find(item => item.id === id).getModels();
       if (!models.some(item => item.id === model)) fail('UNKNOWN_MODEL');
       let text = '', finish;
-      const requestSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(60000), ...(signal ? [signal] : [])]);
       for await (const chunk of llm.stream({ provider: p.route, model, maxTokens: 256, signal: requestSignal,
         messages: [{ role: 'user', content: [{ type: 'text', text: 'Coding connection test: what does JavaScript String(1 + 1) return? Reply with just the result.' }] }] })) {
         if (chunk.type === 'text-delta') text = (text + chunk.text).slice(0, 2000);
@@ -229,8 +276,9 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
   function dispose() {
     for (const attempt of attempts.values()) attempt.controller.abort();
     for (const controller of tests.values()) controller.abort();
+    for (const models of accountModels.values()) models?.clear();
   }
-  return { status, login, answer, cancel, logout, test, dispose };
+  return { status, login, answer, cancel, logout, test, refreshModels, dispose };
 }
 
 // Connection authenticates and validates the original HTTP authority before
@@ -250,7 +298,7 @@ export function createHttpHandler(api) {
   return async request => {
     const json = (body, status = 200) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
     try {
-      if (request.method === 'GET') return json(await api.status());
+      if (request.method === 'GET') return json(await api.status(request.signal));
       if (request.method !== 'POST') return json({ error: 'METHOD_NOT_ALLOWED' }, 405);
       const origin = request.headers.get('origin');
       if (request.headers.get('x-subscriptions-lite') !== '1'
@@ -268,6 +316,7 @@ export function createHttpHandler(api) {
         case 'cancel': return json(await api.cancel(provider, attemptId));
         case 'logout': return json(await api.logout(provider));
         case 'test': return json(await api.test(provider, model, request.signal));
+        case 'models': return json(await api.refreshModels(provider, request.signal));
         default: fail('INVALID_ACTION');
       }
     } catch (error) { return json(safeError(error), 400); }
