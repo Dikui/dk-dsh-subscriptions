@@ -158,6 +158,16 @@ test('catalog auth refresh is bounded by the same ten-second metadata deadline',
   assert.deepEqual(catalog.getModels(), []);
 });
 
+// small/regression — token rotation must not make concurrent readers invalidate each other.
+test('concurrent readers share the refreshed token catalog after credential rotation', async () => {
+  const f = fixture('kimi-coding', async () => Response.json({ data: [{ id: 'remote', context_length: 100000 }] }));
+  await f.catalog.ensure();
+  f.setCredential({ type: 'oauth', access: 'SYNTHETIC-ROTATED-AGAIN', refresh: 'SYNTHETIC-NEW-REFRESH', expires: Date.now() + 3600000 });
+  const outcomes = await Promise.allSettled([f.catalog.ensure(), f.catalog.ensure(), f.catalog.ensure()]);
+  assert.deepEqual(outcomes.map(outcome => outcome.status), ['fulfilled', 'fulfilled', 'fulfilled']);
+  assert.equal(f.requests.length, 2);
+});
+
 // small/spec — TTL is demand-driven, not a background polling loop.
 test('remote catalogs revalidate after TTL and token-only identities invalidate immediately', async t => {
   t.mock.timers.enable({ apis: ['Date'], now: 100000 });

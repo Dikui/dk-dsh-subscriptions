@@ -25,13 +25,16 @@ function validatedModels(value) {
 // Sources provide an opaque account identity and normalized native model descriptors.
 // Identity is never public; one instance owns one vendor's cache and in-flight query.
 export function createAccountModels({ readIdentity, loadModels, scope = 'account', onChange = () => {} }) {
-  let models = [], owner, generation = 0, flight, checkedAt = 0;
+  let models = [], owner, generation = 0, identityGeneration = 0, flight, checkedAt = 0;
   let identityController = new AbortController();
   let state = { source: 'account', scope, state: 'unloaded', error: null, updatedAt: null };
-  function clear() {
+  function reset(preserveIdentityReaders = false) {
     generation++;
-    identityController.abort(new SubscriptionError('MODEL_CATALOG_CHANGED'));
-    identityController = new AbortController();
+    if (!preserveIdentityReaders) {
+      identityGeneration++;
+      identityController.abort(new SubscriptionError('MODEL_CATALOG_CHANGED'));
+      identityController = new AbortController();
+    }
     flight?.controller.abort(new SubscriptionError('MODEL_CATALOG_CHANGED'));
     flight = undefined;
     owner = undefined;
@@ -41,22 +44,29 @@ export function createAccountModels({ readIdentity, loadModels, scope = 'account
     state = { source: 'account', scope, state: 'unloaded', error: null, updatedAt: null };
     if (changed) onChange();
   }
+  function clear() { reset(); }
   async function ensure({ force = false, signal } = {}) {
     signal?.throwIfAborted();
-    const readingGeneration = generation;
+    const readingGeneration = identityGeneration;
     const identitySignal = AbortSignal.any([identityController.signal, AbortSignal.timeout(10000)]);
     let initial;
     try { initial = await waitFor(waitFor(Promise.resolve().then(() => readIdentity(identitySignal)), identitySignal), signal); }
     catch (error) {
       signal?.throwIfAborted();
-      if (readingGeneration !== generation) fail('MODEL_CATALOG_CHANGED');
+      if (readingGeneration !== identityGeneration) fail('MODEL_CATALOG_CHANGED');
       clear(); fail(error instanceof SubscriptionError ? error.code : 'MODEL_CATALOG_FAILED');
     }
     signal?.throwIfAborted();
-    if (readingGeneration !== generation) fail('MODEL_CATALOG_CHANGED');
+    if (readingGeneration !== identityGeneration) fail('MODEL_CATALOG_CHANGED');
     if (typeof initial !== 'string' || !initial) { clear(); fail('MISSING_CREDENTIAL'); }
     if (owner === undefined) owner = initial;
-    else if (owner !== initial) { clear(); owner = initial; }
+    else if (owner !== initial) {
+      // Recheck a slow reader after another caller already moved to a new grant.
+      // Old responses must not revert the owner; readers of the same rotated grant can coalesce.
+      const latest = await waitFor(waitFor(readIdentity(identitySignal), identitySignal), signal);
+      if (readingGeneration !== identityGeneration || latest !== initial) fail('MODEL_CATALOG_CHANGED');
+      if (owner !== initial) { reset(true); owner = initial; }
+    }
     if (flight) return waitFor(flight.promise, signal);
     if (!force && checkedAt && Date.now() - checkedAt < 60000) {
       if (state.error) fail(state.error);
