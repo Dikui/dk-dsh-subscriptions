@@ -47,18 +47,23 @@ export function createAccountModels({ readIdentity, resolveIdentity = readIdenti
   function clear() { reset(); }
   async function ensure({ force = false, signal } = {}) {
     signal?.throwIfAborted();
-    const readingGeneration = identityGeneration;
+    // Valid same-grant readers may coalesce across rotation; obsolete failed reads
+    // must still be fenced by the catalog generation before they can clear anything.
+    const readingGeneration = identityGeneration, readingCatalogGeneration = generation;
     const identitySignal = AbortSignal.any([identityController.signal, AbortSignal.timeout(10000)]);
     let initial;
     try { initial = await waitFor(waitFor(Promise.resolve().then(() => readIdentity(identitySignal)), identitySignal), signal); }
     catch (error) {
       signal?.throwIfAborted();
-      if (readingGeneration !== identityGeneration) fail('MODEL_CATALOG_CHANGED');
+      if (readingGeneration !== identityGeneration || readingCatalogGeneration !== generation) fail('MODEL_CATALOG_CHANGED');
       clear(); fail(error instanceof SubscriptionError ? error.code : 'MODEL_CATALOG_FAILED');
     }
     signal?.throwIfAborted();
     if (readingGeneration !== identityGeneration) fail('MODEL_CATALOG_CHANGED');
-    if (typeof initial !== 'string' || !initial) { clear(); fail('MISSING_CREDENTIAL'); }
+    if (typeof initial !== 'string' || !initial) {
+      if (readingCatalogGeneration !== generation) fail('MODEL_CATALOG_CHANGED');
+      clear(); fail('MISSING_CREDENTIAL');
+    }
     // A grant can be persisted just before the official resolver returns it. Its
     // own readers must share that resolution rather than abort it as an account switch.
     // The resolver and the final identity check still fence unrelated replacements.

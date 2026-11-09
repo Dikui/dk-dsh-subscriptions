@@ -174,6 +174,41 @@ test('late identity results cannot replace or clear a newer account catalog', as
   }
 });
 
+// small/regression — observed credential replacement also fences obsolete failed identity reads.
+test('late failed identity reads cannot clear a replacement account catalog or its discovery', async () => {
+  for (const outcome of ['reject', 'missing']) for (const phase of ['loading', 'ready']) {
+    let identity = 'account-a', delayNextRead = false;
+    const pending = Promise.withResolvers(), started = Promise.withResolvers();
+    const loading = Promise.withResolvers(), release = Promise.withResolvers();
+    const catalog = createAccountModels({
+      readIdentity: async () => {
+        if (delayNextRead) { delayNextRead = false; started.resolve(); return pending.promise; }
+        return identity;
+      },
+      loadModels: async ({ identity: account }) => {
+        if (account === 'account-b') { loading.resolve(); await release.promise; }
+        return [{ id: `${account}-model`, name: `${account} Model` }];
+      },
+    });
+    await catalog.ensure();
+    delayNextRead = true;
+    const obsolete = catalog.ensure().then(() => undefined, error => error.code);
+    await started.promise;
+    identity = 'account-b';
+    const replacement = catalog.ensure().then(() => 'ready', error => error.code);
+    await loading.promise;
+    if (phase === 'ready') { release.resolve(); assert.equal(await replacement, 'ready'); }
+    const current = catalog.status();
+    if (outcome === 'reject') pending.reject(new Error('UPSTREAM-SECRET'));
+    else pending.resolve(undefined);
+    assert.equal(await obsolete, 'MODEL_CATALOG_CHANGED', `${outcome} while ${phase}`);
+    assert.deepEqual(catalog.status(), current);
+    release.resolve();
+    assert.equal(await replacement, 'ready');
+    assert.deepEqual(catalog.getModels().map(model => model.id), ['account-b-model']);
+  }
+});
+
 // small/spec — every source returns the same validated descriptor shape.
 test('registered model sources share descriptor validation', async () => {
   for (const invalid of [null, {}, new Array(1001).fill({ id: 'x', name: 'X' }),
