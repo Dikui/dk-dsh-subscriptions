@@ -44,6 +44,48 @@ test('selecting Fast or Ultrafast saves directly without a confirmation popup', 
   }
 });
 
+// small/regression — reported Speed flicker; a delayed synthetic save replaces HTTP/storage.
+test('saving Speed shows the chosen tier without transient toolbar text', async () => {
+  for (const language of ['en', 'zh']) {
+    const server = fixture(), pending = Promise.withResolvers();
+    const panel = await panelHarness({ ...server, language, fetch: async (path, options) => {
+      if (JSON.parse(options.body).action === 'speed-select') await pending.promise;
+      return server.fetch(path, options);
+    } });
+    let savingWork;
+    try {
+      savingWork = panel.nodes().find(node => node.type === 'select').props.onChange({ target: { value: 'priority' } });
+      await panel.flush();
+      const savingSelect = panel.nodes().find(node => node.type === 'select');
+      assert.equal(savingSelect.props.value, 'priority');
+      assert.equal(panel.text(panel.nodes().find(node => node.props.className === 'sl-speed-value')), 'Fast',
+        'the visible tier updates immediately, not only the transparent select');
+      assert.equal(panel.nodes().some(node => node.props.role === 'status'), false,
+        'saving must not insert visible loading/saving text that shifts the toolbar');
+      assert.equal(savingSelect.props.disabled, true, 'prevent overlapping saves');
+      pending.resolve(); await savingWork; await panel.flush();
+      assert.equal(panel.nodes().find(node => node.type === 'select').props.value, 'priority');
+      assert.equal(panel.nodes().find(node => node.type === 'select').props.disabled, false);
+    } finally { pending.resolve(); await savingWork; panel.dispose(); }
+  }
+});
+
+// small/regression — optimistic Speed must not claim persistence when the synthetic HTTP save fails.
+test('a failed Speed save reports an error and retry restores the persisted tier', async () => {
+  const server = fixture();
+  const panel = await panelHarness({ ...server, fetch: async (path, options) => {
+    if (JSON.parse(options.body).action === 'speed-select') return Response.json({ error: 'SAVE_FAILED' }, { status: 500 });
+    return server.fetch(path, options);
+  } });
+  try {
+    await panel.nodes().find(node => node.type === 'select').props.onChange({ target: { value: 'priority' } });
+    await panel.flush();
+    assert.equal(panel.nodes().some(node => node.type === 'select'), false);
+    await panel.click('Speed unavailable · retry', null);
+    assert.equal(panel.nodes().find(node => node.type === 'select').props.value, 'default');
+  } finally { panel.dispose(); }
+});
+
 test('a late save response cannot replace the newly selected model’s Speed', async () => {
   const server = fixture();
   const pending = Promise.withResolvers();

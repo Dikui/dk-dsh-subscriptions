@@ -262,6 +262,7 @@ window.__ModuleLoader__.load({
             const version = ++generation.current;
             active.current?.abort(); const controller = new AbortController(); active.current = controller;
             setBusy(true); setError(null);
+            setSpeed({ ...currentSpeed, selected: tier });
             try { const data = await send('speed-select', { tier, confirmed: tier !== 'default' }, controller.signal);
               if (generation.current === version) setSpeed(data);
             } catch (error) { if (!controller.signal.aborted && generation.current === version) setError(error.message); }
@@ -293,8 +294,7 @@ window.__ModuleLoader__.load({
                       ?? (currentSpeed.tiers.length < 2 ? t('speedDefaultOnly') : undefined),
                     onChange: event => choose(event.target.value),
                   }, currentSpeed.tiers.map(tier => h('option', { key: tier.id, value: tier.id }, label(tier))))),
-                currentSpeed.stale && h('button', { type: 'button', disabled: busy, title: t('speedStale'), onClick: () => choose('default') }, t('speedNormal')),
-                busy && h('span', { role: 'status' }, t('speedSaving'))));
+                currentSpeed.stale && h('button', { type: 'button', disabled: busy, title: t('speedStale'), onClick: () => choose('default') }, t('speedNormal'))));
         }
         function Panel({ close }) {
           React.useSyncExternalStore(subscribe, snapshot, snapshot);
