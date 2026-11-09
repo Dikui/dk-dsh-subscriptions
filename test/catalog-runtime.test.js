@@ -106,6 +106,7 @@ test('registered subscription routes use the same remote catalogs and native OAu
           : { error: 'SYNTHETIC-UPSTREAM-SECRET' });
     } else {
       const rows = grokRows();
+      rows[1].capabilities.default_reasoning_effort = effort;
       if (context) rows[1].context_length = context;
       agent.get('https://api.x.ai').intercept({ method: 'GET', path: '/v1/models', headers })
         .reply(status, status === 200 ? { object: 'list', data: only ? [rows[1]] : rows }
@@ -233,6 +234,19 @@ test('registered subscription routes use the same remote catalogs and native OAu
       }
       agent.assertNoPendingInterceptors();
     });
+    await t.test('a remote none default resolves to off and reaches the native wire as none', async () => {
+      const vendor = vendors[2], captured = [];
+      metadata(vendor.id, { effort: 'none' });
+      assert.deepEqual(await runtime.tool.execute({ action: 'models', provider: vendor.id }, exec), { ok: true });
+      const resolved = await runtime.adapter.resolveModel(vendor.route, vendor.model);
+      assert.equal(resolved.reasoning.defaultEffort, 'off');
+      inference(vendor, captured);
+      await successful(runtime.adapter.stream(optionsFor(vendor)));
+      assert.equal(captured[0].body.reasoning.effort, 'none');
+      metadata(vendor.id);
+      assert.deepEqual(await runtime.tool.execute({ action: 'models', provider: vendor.id }, exec), { ok: true });
+      agent.assertNoPendingInterceptors();
+    });
     await t.test('K3.1 refuses explicit off before any native HTTP request', async () => {
       const before = calls().length;
       for (const model of ['k3.1-pro', 'k3.1-pro-highspeed']) {
@@ -242,6 +256,23 @@ test('registered subscription routes use the same remote catalogs and native OAu
         await assert.rejects(Array.fromAsync(prepared.stream(options)), { code: 'UNSUPPORTED_REASONING_EFFORT' });
       }
       assert.equal(calls().length, before);
+    });
+    await t.test('remote Kimi effort upgrades override an exact SDK model with outdated capability flags', async () => {
+      const vendor = { ...vendors[1], model: 'kimi-for-coding-highspeed' }, captured = [];
+      agent.get('https://api.kimi.com').intercept({ method: 'GET', path: '/coding/v1/models',
+        headers: { authorization: `Bearer ${accessFor(vendor.id)}` } }).reply(200, { data: [{
+          id: vendor.model, context_length: 262144, supports_reasoning: true,
+          reasoning: { type: 'only', effort: { valid: ['low', 'high', 'max'], default: 'high' } },
+        }] });
+      assert.deepEqual(await runtime.tool.execute({ action: 'models', provider: vendor.id }, exec), { ok: true });
+      const resolved = await runtime.adapter.resolveModel(vendor.route, vendor.model);
+      assert.deepEqual(resolved.reasoning.efforts.map(item => item.id), ['low', 'high', 'max']);
+      inference(vendor, captured);
+      await successful(runtime.adapter.stream({ ...optionsFor(vendor), reasoningEffort: 'low' }));
+      assert.equal(captured[0].body.reasoning_effort, 'low');
+      metadata(vendor.id);
+      assert.deepEqual(await runtime.tool.execute({ action: 'models', provider: vendor.id }, exec), { ok: true });
+      agent.assertNoPendingInterceptors();
     });
     await t.test('forced metadata refresh updates descriptors without changing an already-prepared stream', async () => {
       const vendor = vendors[0], captured = [];

@@ -59,6 +59,10 @@ export function createAccountModels({ readIdentity, resolveIdentity = readIdenti
     signal?.throwIfAborted();
     if (readingGeneration !== identityGeneration) fail('MODEL_CATALOG_CHANGED');
     if (typeof initial !== 'string' || !initial) { clear(); fail('MISSING_CREDENTIAL'); }
+    // A grant can be persisted just before the official resolver returns it. Its
+    // own readers must share that resolution rather than abort it as an account switch.
+    // The resolver and the final identity check still fence unrelated replacements.
+    if (flight?.resolving) return waitFor(flight.promise, signal);
     if (owner === undefined) owner = initial;
     else if (owner !== initial) {
       // Recheck a slow reader after another caller already moved to a new grant.
@@ -72,7 +76,7 @@ export function createAccountModels({ readIdentity, resolveIdentity = readIdenti
       if (state.error) fail(state.error);
       return;
     }
-    const current = { generation, controller: new AbortController() };
+    const current = { generation, controller: new AbortController(), resolving: true };
     flight = current;
     // A caller leaving must not cancel another caller's shared metadata query.
     const requestSignal = AbortSignal.any([current.controller.signal, AbortSignal.timeout(10000)]);
@@ -86,6 +90,7 @@ export function createAccountModels({ readIdentity, resolveIdentity = readIdenti
       // invalidating the callers sharing it, then fence the final metadata by that grant.
       initial = resolved;
       owner = resolved;
+      current.resolving = false;
       const next = validatedModels(await waitFor(loadModels({ identity: initial, signal: requestSignal }), requestSignal));
       const latest = await waitFor(readIdentity(requestSignal), requestSignal);
       if (generation !== current.generation || latest !== initial) fail('MODEL_CATALOG_CHANGED');

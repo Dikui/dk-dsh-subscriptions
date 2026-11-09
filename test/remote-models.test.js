@@ -194,6 +194,32 @@ test('failed OAuth refresh is shared, visible and cached until refresh or creden
   assert.doesNotMatch(JSON.stringify(catalog.status()), /SECRET|SYNTHETIC/);
 });
 
+// small/regression — a reader arriving after refresh persistence still joins that same discovery.
+test('a persisted OAuth rotation does not abort the refresh that produced it', async () => {
+  let credential = { type: 'oauth', access: 'SYNTHETIC-OLD', refresh: 'SYNTHETIC-REFRESH', expires: 0 };
+  const persisted = Promise.withResolvers(), release = Promise.withResolvers();
+  let authCalls = 0, requests = 0;
+  const catalog = createAccountModels(accountModelSources.get('kimi-coding')({ baseModels: baselines['kimi-coding'],
+    readCredential: async () => credential,
+    getAuth: async () => {
+      authCalls++;
+      credential = { ...credential, access: 'SYNTHETIC-PERSISTED', refresh: 'SYNTHETIC-PERSISTED-REFRESH' };
+      persisted.resolve();
+      await release.promise;
+      return { source: 'OAuth', auth: { headers: { Authorization: `Bearer ${credential.access}` } } };
+    },
+    fetchCatalog: async () => { requests++; return Response.json({ data: [{ id: 'remote', context_length: 100000 }] }); },
+  }));
+  const first = catalog.ensure().then(() => 'ready', error => error.code);
+  await persisted.promise;
+  const concurrent = [catalog.ensure(), catalog.ensure()].map(promise => promise.then(() => 'ready', error => error.code));
+  await new Promise(resolve => setImmediate(resolve));
+  release.resolve();
+  assert.deepEqual(await Promise.all([first, ...concurrent]), ['ready', 'ready', 'ready']);
+  assert.equal(authCalls, 1);
+  assert.equal(requests, 1);
+});
+
 // small/regression — token rotation must not make concurrent readers invalidate each other.
 test('concurrent readers share the refreshed token catalog after credential rotation', async () => {
   const f = fixture('kimi-coding', async () => Response.json({ data: [{ id: 'remote', context_length: 100000 }] }));

@@ -68,6 +68,8 @@ function kimiModels(value, baseline) {
       contextWindow: positive(row?.context_length) ? row.context_length : positive(row?.limit?.context) ? row.limit.context : base.contextWindow,
       input: row?.supports_image_in === true || row?.modalities?.input?.includes('image') ? ['text', 'image'] : ['text'],
       reasoning: row?.supports_reasoning === true || onlyThinking, thinkingLevelMap: effortMap(efforts),
+      // A same-ID capability upgrade must reach the wire, even when its SDK template predates efforts.
+      ...(Array.isArray(declared) ? { compat: { ...base.compat, supportsReasoningEffort: efforts.length > 0 } } : {}),
       ...(efforts.includes(defaultEffort) ? { defaultReasoningEffort: canonicalEffort(defaultEffort) } : {}),
     };
   });
