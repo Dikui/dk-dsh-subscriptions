@@ -1,4 +1,5 @@
 import { createRequire, findPackageJSON } from 'node:module';
+import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { PiAiAdapter, recordKeyFor } from '@deepseek-ai/dsh-llm-pi-ai';
 import { createHttpHandler, createSubscriptions, fail, PROVIDERS, safeError, subscriptionBindings } from './core.js';
@@ -7,6 +8,8 @@ import { createAccountModels } from './models.js';
 import { accountModelSources } from './model-sources.js';
 import { createKimiTools } from './kimi-tools.js';
 import { createGrokSearchTool } from './grok-tools.js';
+import { createSpeedHost } from './speed-host.js';
+import { withSpeedPayload } from './speed.js';
 import packageInfo from './package.json' with { type: 'json' };
 
 export const name = 'dk-subscriptions';
@@ -26,7 +29,9 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false }
   const { builtinProviders } = await import(new URL('./dist/providers/all.js', pathToFileURL(piManifest)).href);
   const { createModels } = await import(new URL('./dist/models.js', pathToFileURL(piManifest)).href);
   const { default: piPackage } = await import(pathToFileURL(piManifest).href, { with: { type: 'json' } });
+  const { isAgentLoopRequest } = await import(createRequire(adapterUrl).resolve('@deepseek-ai/dsh-llm'));
   const catalog = builtinProviders();
+  let speedSelections;
   const network = await createAutoProxy(() => createRequire(adapterUrl)('undici'));
   const lifetime = new AbortController();
   let api;
@@ -60,12 +65,34 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false }
   async function ensureAccountModels(provider, signal) {
     await modelsForRoute(provider)?.ensure({ signal: signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal });
   }
+  async function scopedSpeedModel(provider, descriptor) {
+    const credential = await bindings.auth.credentials.read(provider);
+    if (!credential) fail('MISSING_CREDENTIAL');
+    const identity = credential.accountId ?? credential.subject ?? credential.refresh ?? credential.access;
+    const speedAccount = createHash('sha256').update(`dk-subscriptions:speed:${identity}`).digest('hex');
+    return { ...descriptor, speedAccount };
+  }
   class SubscriptionAdapter extends PiAiAdapter {
     async *streamWithSnapshot(options, snapshot) {
       const signal = options.signal ? AbortSignal.any([options.signal, lifetime.signal]) : lifetime.signal;
       await ensureAccountModels(options.provider, signal);
       const models = modelsForRoute(options.provider);
       if (models && !models.getModels().some(model => model.id === options.model)) fail('UNKNOWN_MODEL');
+      let descriptor = this.modelOf(snapshot, options.provider, options.model);
+      // A prepared descriptor may outlive an account switch. Use the current
+      // account scope when matching saved consumption consent, not the old one.
+      if (speedSelections) descriptor = await scopedSpeedModel(options.provider, descriptor);
+      const tier = speedSelections?.capture(options, descriptor);
+      if (tier !== undefined) {
+        // A request-owned provider preserves the exact prepared descriptor and
+        // hook. Never mutate the shared profile or another concurrent request.
+        const profile = this.profileOf(snapshot, options.provider).piProvider;
+        const requestModels = createModels(bindings.auth);
+        requestModels.setProvider({ ...profile, getModels: () => [descriptor], getAllModels: () => [descriptor],
+          streamSimple: (model, context, nativeOptions) => profile.streamSimple(model, context, withSpeedPayload(nativeOptions, tier)),
+        });
+        snapshot = { ...snapshot, models: requestModels };
+      }
       yield* network.wrap(super.streamWithSnapshot({ ...options, signal }, snapshot));
     }
     async listModels(provider) {
@@ -94,6 +121,15 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false }
     }
   }
   const adapter = new SubscriptionAdapter({ ...bindings, resolveAttachments: () => ctx.get('attachments') });
+  ctx.inject?.(['agents', 'storageDomain'], async scope => {
+    speedSelections = await createSpeedHost(scope, { adapterUrl, isConversation: isAgentLoopRequest,
+      modelFor: async (provider, model, signal) => {
+        await ensureAccountModels(provider, signal);
+        return scopedSpeedModel(provider, adapter.modelOf(adapter.current(), provider, model));
+      },
+    });
+    scope.on('dispose', () => { speedSelections = undefined; });
+  });
   const routes = [...bindings.profiles().keys()];
   if (routes.length) ctx.llm.registerAdapter(routes, adapter);
   api = createSubscriptions({ authorization: {

@@ -317,6 +317,8 @@ export function createHttpHandler(api) {
         case 'logout': return json(await api.logout(provider));
         case 'test': return json(await api.test(provider, model, request.signal));
         case 'models': return json(await api.refreshModels(provider, request.signal));
+        case 'speed-state': return json(await api.speedState(body, request.signal));
+        case 'speed-select': return json(await api.speedSelect(body, request.signal));
         default: fail('INVALID_ACTION');
       }
     } catch (error) { return json(safeError(error), 400); }

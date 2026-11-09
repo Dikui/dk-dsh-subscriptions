@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import { fail } from './core.js';
+import { codexSpeed } from './speed.js';
 
 const levels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 const positive = value => Number.isSafeInteger(value) && value > 0;
@@ -22,6 +24,7 @@ function codexModels(value, baseline) {
     selected.set(id, { priority: Number.isFinite(row.priority) ? row.priority : 0, model: {
       ...base, id, name: typeof row.display_name === 'string' && row.display_name.trim() ? row.display_name.slice(0, 200) : id,
       input: input.length ? [...new Set(input)] : ['text'], reasoning: efforts.length > 0, thinkingLevelMap,
+      speed: codexSpeed(row),
       supportsReasoningEffortUpdates: row.supports_reasoning_effort_updates === true,
       defaultReasoningEffort: typeof row.default_reasoning_level === 'string' ? row.default_reasoning_level : undefined,
       contextWindow: positive(row.context_window) ? row.context_window : positive(row.max_context_window) ? row.max_context_window : base.contextWindow,
@@ -56,7 +59,9 @@ function openAICodexModels({ baseModels, clientVersion, readCredential, getAuth,
       if (!response.ok) fail([401, 403].includes(response.status) ? 'MODEL_CATALOG_DENIED' : response.status === 429 ? 'MODEL_CATALOG_RATE_LIMIT' : 'MODEL_CATALOG_FAILED');
       let payload;
       try { payload = await response.json(); } catch { fail('MODEL_CATALOG_INVALID'); }
-      return codexModels(payload, baseModels);
+      // Account-scoped consent fingerprint, never a raw identifier or token.
+      const speedAccount = createHash('sha256').update(`dk-subscriptions:speed:${identity}`).digest('hex');
+      return codexModels(payload, baseModels).map(model => ({ ...model, speedAccount }));
     },
   };
 }

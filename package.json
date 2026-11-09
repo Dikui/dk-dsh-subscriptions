@@ -1,6 +1,6 @@
 {
   "name": "dk-subscriptions",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "private": true,
   "type": "module",
   "description": "Minimal isolated OAuth connections for coding subscriptions in DeepSeek Harness",
@@ -12,8 +12,8 @@
     "./icon": "./icon.svg",
     "./package.json": "./package.json"
   },
-  "files": ["index.js", "core.js", "network.js", "models.js", "model-sources.js", "kimi-tools.js", "grok-tools.js", "client.js", "cordis.patch.yml", "locale/*.json", "icon.svg", "README.md", "docs/research/grok-browser-verification.md"],
-  "scripts": { "test": "node --test test/*.test.js", "check": "node --check index.js && node --check core.js && node --check network.js && node --check models.js && node --check model-sources.js && node --check kimi-tools.js && node --check grok-tools.js && node --check client.js" },
+  "files": ["index.js", "core.js", "network.js", "models.js", "model-sources.js", "speed.js", "speed-host.js", "kimi-tools.js", "grok-tools.js", "client.js", "cordis.patch.yml", "locale/*.json", "icon.svg", "README.md", "docs/research/grok-browser-verification.md"],
+  "scripts": { "test": "node --test test/*.test.js", "check": "node --check index.js && node --check core.js && node --check network.js && node --check models.js && node --check model-sources.js && node --check speed.js && node --check speed-host.js && node --check kimi-tools.js && node --check grok-tools.js && node --check client.js" },
   "engines": { "node": ">=22.14", "dsh": "0.2.1-rc.5 || 0.2.2-rc.1" },
   "peerDependencies": { "@deepseek-ai/dsh-llm-pi-ai": "0.2.1-rc.5 || 0.2.2-rc.1" },
   "dsh": {

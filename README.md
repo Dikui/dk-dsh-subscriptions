@@ -48,6 +48,18 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 - **OAuth 不保证仅扣订阅额度。** 目前官方计价为每 1,000 条抓取帖子 $5、每 1,000 个用户资料 $10，另加模型 token 费用。`max_turns` 限制循环轮次，不限制并行调用、抓取数量或总费用；1,024 个可见输出 token 上限也不包含推理/工具 token。调用前需获得费用授权。依据：[X Search](https://docs.x.ai/developers/tools/x-search)、[用量与轮次](https://docs.x.ai/developers/tools/tool-usage-details)、[定价](https://docs.x.ai/developers/pricing)。
 - 本次真实测试已确认当前账号 OAuth 可完成一次 X Search 调用，但返回 0 条帖子、无引用；不据此宣称帖子检索质量、其他模型或订阅专属计费已验证。
 
+## 会话速度档位
+
+模型选择器旁仅显示当前速度档位，不显示额外的「Speed」标题。选择按会话、提供商、模型和凭证作用域保存；从下一模型步骤生效，重试保持该步骤的选择。用户选择档位后直接保存，不弹出二次确认；可能增加额度或费用的说明保留在档位提示中。不修改推理强度、不切换认证方式，不向工具的辅助模型请求继承速度选择。
+
+- **Codex**：读取账号目录的 `service_tiers`，保留实际档位 ID、名称和说明；兼容旧 `additional_speed_tiers: ["fast"]` → `priority`。正常档位不发送 `service_tier`，不会自动应用目录中可能增加消耗的默认值。未知或下线档位不猜测替代。依据：[官方模型能力定义](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs)、[速度说明](https://developers.openai.com/codex/speed/)。
+- **Grok**：文本 Responses 模型提供正常／Priority，按[官方 Priority Processing 契约](https://docs.x.ai/developers/advanced-api-usage/priority-processing.md)发送 `service_tier: "priority"`。它是溢价排队优先级，不是 Grok Build Fast；实际是否获批由服务端决定。OAuth 套餐权益和仅扣订阅额度仍未验证，档位提示保留此说明，不自动付费重试或回退。
+- **Kimi**：按[官方模型说明](https://www.kimi.com/code/docs/kimi-code/models.html)，速度由模型 ID 决定而非通用 `service_tier`。高速模型显示 Highspeed；普通模型显示正常。当前 `kimi-for-coding`（K2.8）和 `kimi-for-coding-highspeed`（K2.7）不是同一模型，不能伪造档位互换。SDK 未收录的 K3.1 模型不自动捏造传输描述。
+
+通用能力由 [speed.js](<speed.js>) 的厂商能力适配、会话选择和请求快照组成；[speed-host.js](<speed-host.js>) 使用宿主的独立 storageDomain sidecar 保存，不写入提示词或实验性会话事件。sidecar 不随会话导出或分叉自动复制，子会话从正常档位开始。更换凭证作用域不会继承高消耗选择。前端选择是所请求的档位，不代表服务端保证达到对应速度。
+
+本地更新后需完全退出并重启 DSH；仅刷新网页不会加载新的后台逻辑。已完成离线请求捕获与事件测试，不代表厂商真实账号权益已验证。
+
 ## 账号模型列表
 
 - 发现流程是通用的：[models.js](<models.js>) 统一校验模型描述、缓存、并发、超时、取消、账号隔离和失败状态；[model-sources.js](<model-sources.js>) 的注册表只保留厂商查询与字段映射。一个 source 提供 `readIdentity(signal)` 和 `loadModels({ identity, signal })`，返回规范化的原生模型描述，接入后设置页、主路由、测试与退出流程无需再按厂商分支。

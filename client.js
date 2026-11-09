@@ -7,6 +7,10 @@ window.__ModuleLoader__.load({
     const messages = {
       en: {
         title: 'dk-subscriptions', navigation: 'Subscription pages', modelsPage: 'Model connections', toolsPage: 'Data tools',
+        speed: 'Speed', speedNormal: 'Normal', speedDefaultOnly: 'Default only · this model has no verified switchable speed tiers',
+        speedLoading: 'Loading speed…', speedError: 'Speed unavailable · retry', speedSaving: 'Saving speed…',
+        speedStale: 'The saved speed is no longer supported. Select Normal before continuing.',
+        speedChanged: 'The selected model changed. Reload Speed and try again.',
         close: 'Close', loading: 'Loading subscriptions…', retry: 'Retry', connect: 'Connect', reconnect: 'Reconnect', cancel: 'Cancel authorization', logout: 'Remove credential',
         saved: 'Credential saved · entitlement not verified', missing: 'No subscription credential saved', apiKey: 'An API key exists; it is not a subscription credential.', unavailable: 'Unavailable',
         running: 'Waiting for authorization', authorized: 'Authorization finished', cancelled: 'Stopped waiting. A pending credential save may still finish; remove it if it appears.', failed: 'Authorization failed',
@@ -55,6 +59,10 @@ window.__ModuleLoader__.load({
       },
       zh: {
         title: 'dk-subscriptions', navigation: '订阅管理子页', modelsPage: '模型接入', toolsPage: '数据工具',
+        speed: 'Speed', speedNormal: '正常', speedDefaultOnly: '仅默认速度 · 此模型没有已验证的可切换速度档位',
+        speedLoading: '正在加载速度…', speedError: '速度不可用 · 重试', speedSaving: '正在保存速度…',
+        speedStale: '已保存的速度不再受支持，请先选择正常档位再继续。',
+        speedChanged: '所选模型已变化，请重新加载速度后重试。',
         close: '关闭', loading: '正在加载订阅…', retry: '重试', connect: '连接', reconnect: '重新连接', cancel: '取消授权', logout: '移除凭证',
         saved: '凭证已保存 · 订阅权益未验证', missing: '尚未保存订阅凭证', apiKey: '存在 API 密钥，但它不是订阅凭证。', unavailable: '暂不可用',
         running: '等待授权', authorized: '授权已完成', cancelled: '已停止等待。进行中的凭证保存可能仍会完成；如出现凭证，请移除。', failed: '授权失败',
@@ -206,6 +214,87 @@ window.__ModuleLoader__.load({
                 autoComplete: 'off', spellCheck: false, maxLength: 16384, placeholder: prompt.placeholder,
                 onChange: event => setValue(event.target.value) })),
           h('button', { type: 'submit', disabled: disabled || !value }, t('submit')));
+        }
+        function Speed({ sessionId, directory, load }) {
+          React.useSyncExternalStore(subscribe, snapshot, snapshot);
+          const state = React.useSyncExternalStore(fn => directory.subscribe(fn), () => directory.getSnapshot());
+          const current = state.current;
+          const provider = current?.provider, model = current?.model;
+          const supported = ['subscription-openai-codex', 'subscription-kimi-coding', 'subscription-xai'].includes(provider);
+          const [speed, setSpeed] = React.useState(null);
+          const [error, setError] = React.useState(null);
+          const [busy, setBusy] = React.useState(false);
+          const generation = React.useRef(0), active = React.useRef(null);
+          const id = React.useId();
+          async function send(action, extra, signal) {
+            const response = await fetch('/api/subscriptions-lite/speed', { method: 'POST', credentials: 'same-origin', cache: 'no-store', signal,
+              headers: { 'Content-Type': 'application/json', 'X-Subscriptions-Lite': '1' },
+              body: JSON.stringify({ action, sessionId, provider, model, ...extra }),
+            });
+            const data = await response.json();
+            if (!response.ok || data?.error) throw new Error(data?.error ?? 'REQUEST_FAILED');
+            if (data.sessionId !== sessionId || data.provider !== provider || data.model !== model || typeof data.selected !== 'string'
+              || !Array.isArray(data.tiers) || !data.tiers.length || data.tiers.length > 33
+              || !data.tiers.every(tier => typeof tier?.id === 'string' && typeof tier.name === 'string')
+              || !data.tiers.some(tier => tier.id === data.selected)) throw new Error('BAD_RESPONSE');
+            return data;
+          }
+          async function refresh() {
+            const version = ++generation.current;
+            active.current?.abort();
+            const controller = new AbortController(); active.current = controller;
+            setError(null); setBusy(true);
+            try { const data = await send('speed-state', {}, controller.signal); if (generation.current === version) setSpeed(data); }
+            catch (error) { if (!controller.signal.aborted && generation.current === version) setError(error.message); }
+            finally { if (generation.current === version) setBusy(false); }
+          }
+          React.useEffect(() => { load(); }, [load]);
+          React.useEffect(() => {
+            setSpeed(null); setError(null); setBusy(false);
+            if (supported) refresh();
+            return () => { generation.current++; active.current?.abort(); };
+          }, [sessionId, provider, model, state.groups]);
+          if (!supported) return null;
+          const currentSpeed = speed?.provider === provider && speed.model === model ? speed : null;
+          const label = tier => tier.id === 'default' && tier.name === 'Normal' ? t('speedNormal') : tier.name;
+          async function choose(tier) {
+            if (busy || (tier === currentSpeed.selected && !currentSpeed.stale)) return;
+            const version = ++generation.current;
+            active.current?.abort(); const controller = new AbortController(); active.current = controller;
+            setBusy(true); setError(null);
+            try { const data = await send('speed-select', { tier, confirmed: tier !== 'default' }, controller.signal);
+              if (generation.current === version) setSpeed(data);
+            } catch (error) { if (!controller.signal.aborted && generation.current === version) setError(error.message); }
+            finally { if (generation.current === version) setBusy(false); }
+          }
+          return h('div', { className: 'sl-speed' },
+            h('style', null, `
+              .sl-speed{display:inline-flex;align-items:center;gap:4px;min-width:0;color:var(--dsw-alias-label-caption);font-size:13px;font-weight:400;line-height:20px}
+              .sl-speed-control{position:relative;display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:150px;height:28px;padding:0 4px 0 8px;border-radius:var(--dsw-radius-sm,4px)}
+              .sl-speed-value{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+              .sl-speed-chevron{flex:none;width:14px;height:14px;color:var(--dsw-alias-label-caption);pointer-events:none}
+              .sl-speed-control select{position:absolute;inset:0;box-sizing:border-box;width:100%;min-width:0;max-width:none;height:100%;margin:0;padding:0;border:0;opacity:0;cursor:pointer;font:inherit}
+              .sl-speed-control:has(select:disabled){color:var(--dsw-alias-label-caption)}
+              .sl-speed-control:has(select:focus-visible){box-shadow:0 0 0 2px var(--dsw-focus-ring-color,var(--dsw-alias-state-business-primary))}
+              .sl-speed button{font:inherit;color:inherit;background:transparent;border:0;border-radius:var(--dsw-radius-sm,4px);height:28px;padding:0 8px;cursor:pointer}
+              .sl-speed button:focus-visible{outline:2px solid var(--dsw-focus-ring-color);outline-offset:2px}
+              @media(hover:hover){.sl-speed-control:has(select:not(:disabled)):hover,.sl-speed button:not(:disabled):hover{background:var(--dsw-alias-interactive-bg-hover)}}
+            `),
+            error ? h('button', { type: 'button', onClick: refresh, title: error === 'SPEED_MODEL_CHANGED' ? t('speedChanged') : t('speedError') }, t('speedError'))
+              : !currentSpeed ? h('span', { role: 'status' }, t('speedLoading'))
+              : h(React.Fragment, null,
+                h('span', { className: 'sl-speed-control', 'aria-busy': busy },
+                  h('span', { className: 'sl-speed-value', 'aria-hidden': true }, label(currentSpeed.tiers.find(tier => tier.id === currentSpeed.selected))),
+                  currentSpeed.tiers.length > 1 && h('svg', { className: 'sl-speed-chevron', viewBox: '0 0 24 24', fill: 'none', 'aria-hidden': true },
+                    h('path', { d: 'm6 9 6 6 6-6', stroke: 'currentColor', strokeWidth: 1.5, strokeLinecap: 'round', strokeLinejoin: 'round' })),
+                  h('select', { id, 'aria-label': t('speed'), value: currentSpeed.selected,
+                    disabled: busy || state.pending !== null || currentSpeed.tiers.length < 2,
+                    title: currentSpeed.stale ? t('speedStale') : currentSpeed.tiers.find(tier => tier.id === currentSpeed.selected)?.description
+                      ?? (currentSpeed.tiers.length < 2 ? t('speedDefaultOnly') : undefined),
+                    onChange: event => choose(event.target.value),
+                  }, currentSpeed.tiers.map(tier => h('option', { key: tier.id, value: tier.id }, label(tier))))),
+                currentSpeed.stale && h('button', { type: 'button', disabled: busy, title: t('speedStale'), onClick: () => choose('default') }, t('speedNormal')),
+                busy && h('span', { role: 'status' }, t('speedSaving'))));
         }
         function Panel({ close }) {
           React.useSyncExternalStore(subscribe, snapshot, snapshot);
@@ -475,6 +564,17 @@ window.__ModuleLoader__.load({
                   : h('div', { className: 'sl-notice', role: 'status' }, h('p', null, `${t('testResult')} · ${result.model}`), h('pre', null, result.text))));
             })));
         }
+        ctx.inject?.(['modelDirectories', 'sessions'], scope => {
+          scope.slots.inject('conversation.input.right', () => scope.slots.register({
+            name: 'conversation.input.right', id: 'dk-subscriptions-speed', order: 90,
+            inject: sessionId => {
+              const directory = scope.modelDirectories.directoryFor(sessionId);
+              return { sessionId, directory: directory.store, load: () => {
+                if (scope.sessions.subagentAddress(sessionId) === undefined) directory.load().catch(() => {});
+              } };
+            },
+          }, Speed));
+        });
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section', id: 'subscriptions-lite', order: 55, label: () => t('title'),
         }, Panel));
