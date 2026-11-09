@@ -4,6 +4,14 @@ import { codexSpeed } from './speed.js';
 
 const levels = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 const positive = value => Number.isSafeInteger(value) && value > 0;
+// pi-ai's level convention (getSupportedThinkingLevels): a missing level falls back to the
+// default capability, null removes it, and xhigh/max exist only when explicitly mapped.
+// Harness refuses a reasoning model that exposes no selectable effort and then drops the
+// whole provider, so metadata without a usable declaration must keep the provider default.
+const selectableEffort = map => levels.some(level => {
+  const mapped = map?.[level];
+  return mapped !== null && (level === 'xhigh' || level === 'max' ? mapped !== undefined : true);
+});
 
 function codexModels(value, baseline) {
   if (!Array.isArray(value?.models) || value.models.length > 1000 || !baseline.length) fail('MODEL_CATALOG_INVALID');
@@ -21,12 +29,14 @@ function codexModels(value, baseline) {
       if (levels.includes(level)) thinkingLevelMap[level] = effort;
     }
     const input = Array.isArray(row.input_modalities) ? row.input_modalities.filter(type => ['text', 'image'].includes(type)) : [];
+    const reasoning = efforts.length > 0 && selectableEffort(thinkingLevelMap);
+    const defaultEffort = efforts.includes(row.default_reasoning_level) ? canonicalEffort(row.default_reasoning_level) : undefined;
     selected.set(id, { priority: Number.isFinite(row.priority) ? row.priority : 0, model: {
       ...base, id, name: typeof row.display_name === 'string' && row.display_name.trim() ? row.display_name.slice(0, 200) : id,
-      input: input.length ? [...new Set(input)] : ['text'], reasoning: efforts.length > 0, thinkingLevelMap,
+      input: input.length ? [...new Set(input)] : ['text'], reasoning, thinkingLevelMap,
       speed: codexSpeed(row),
       supportsReasoningEffortUpdates: row.supports_reasoning_effort_updates === true,
-      defaultReasoningEffort: efforts.includes(row.default_reasoning_level) ? canonicalEffort(row.default_reasoning_level) : undefined,
+      ...(reasoning && thinkingLevelMap[defaultEffort] != null ? { defaultReasoningEffort: defaultEffort } : {}),
       contextWindow: positive(row.context_window) ? row.context_window : positive(row.max_context_window) ? row.max_context_window : base.contextWindow,
       ...(positive(row.max_context_window) ? { maxContextWindow: row.max_context_window } : {}),
       cost: known?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -63,14 +73,16 @@ function kimiModels(value, baseline) {
     const onlyThinking = row?.reasoning?.type === 'only' || row?.supports_thinking_type === 'only';
     const efforts = Array.isArray(declared) ? declared.filter(item => (levels.includes(item) || item === 'none')
       && (!onlyThinking || !['none', 'off'].includes(item))) : [];
-    const defaultEffort = row?.think_efforts?.default_effort ?? effort?.default;
+    const defaultEffort = canonicalEffort(row?.think_efforts?.default_effort ?? effort?.default);
+    const thinkingLevelMap = effortMap(efforts);
+    const reasoning = (row?.supports_reasoning === true || onlyThinking) && selectableEffort(thinkingLevelMap);
     return { ...base, id: row?.id, name: row?.display_name ?? row?.id,
       contextWindow: positive(row?.context_length) ? row.context_length : positive(row?.limit?.context) ? row.limit.context : base.contextWindow,
       input: row?.supports_image_in === true || row?.modalities?.input?.includes('image') ? ['text', 'image'] : ['text'],
-      reasoning: row?.supports_reasoning === true || onlyThinking, thinkingLevelMap: effortMap(efforts),
+      reasoning, thinkingLevelMap,
       // A same-ID capability upgrade must reach the wire, even when its SDK template predates efforts.
       ...(Array.isArray(declared) ? { compat: { ...base.compat, supportsReasoningEffort: efforts.length > 0 } } : {}),
-      ...(efforts.includes(defaultEffort) ? { defaultReasoningEffort: canonicalEffort(defaultEffort) } : {}),
+      ...(reasoning && thinkingLevelMap[defaultEffort] != null ? { defaultReasoningEffort: defaultEffort } : {}),
     };
   });
 }
@@ -89,12 +101,16 @@ async function grokModels(value, baseline, { query }) {
     const known = baseline.find(model => model.id === row?.id);
     const capabilities = row?.capabilities ?? text.capabilities;
     const efforts = Array.isArray(capabilities?.reasoning_effort) ? capabilities.reasoning_effort : undefined;
+    const thinkingLevelMap = efforts ? effortMap(efforts) : known?.thinkingLevelMap ?? effortMap([]);
+    const reasoning = (efforts ? efforts.some(effort => effort !== 'none') : known?.reasoning === true)
+      && selectableEffort(thinkingLevelMap);
+    const defaultEffort = efforts?.includes(capabilities.default_reasoning_effort)
+      ? canonicalEffort(capabilities.default_reasoning_effort) : undefined;
     return [{ ...base, id: row?.id, name: row?.id,
       contextWindow: positive(row?.context_length) ? row.context_length : base.contextWindow,
       input: text.input_modalities?.includes('image') ? ['text', 'image'] : ['text'],
-      reasoning: efforts ? efforts.some(effort => effort !== 'none') : known?.reasoning === true,
-      thinkingLevelMap: efforts ? effortMap(efforts) : known?.thinkingLevelMap ?? effortMap([]),
-      ...(efforts?.includes(capabilities.default_reasoning_effort) ? { defaultReasoningEffort: canonicalEffort(capabilities.default_reasoning_effort) } : {}),
+      reasoning, thinkingLevelMap,
+      ...(reasoning && thinkingLevelMap[defaultEffort] != null ? { defaultReasoningEffort: defaultEffort } : {}),
     }];
   });
 }

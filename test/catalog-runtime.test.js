@@ -198,6 +198,8 @@ test('registered subscription routes use the same remote catalogs and native OAu
           const prepared = await runtime.adapter.prepareCall(vendor.route, model.id);
           assert.deepEqual(prepared.model, resolved);
           assert.equal(resolved.name, model.name);
+          // Harness drops the whole provider when a resolved model exposes reasoning with no effort.
+          if (resolved.reasoning) assert.ok(resolved.reasoning.efforts.length > 0, `${vendor.id}/${model.id} exposes empty reasoning metadata`);
         }
         assert.equal((await runtime.adapter.resolveModel(vendor.route, vendor.model)).context.contextWindow, vendor.context);
       }
@@ -270,6 +272,28 @@ test('registered subscription routes use the same remote catalogs and native OAu
       inference(vendor, captured);
       await successful(runtime.adapter.stream({ ...optionsFor(vendor), reasoningEffort: 'low' }));
       assert.equal(captured[0].body.reasoning_effort, 'low');
+      metadata(vendor.id);
+      assert.deepEqual(await runtime.tool.execute({ action: 'models', provider: vendor.id }, exec), { ok: true });
+      agent.assertNoPendingInterceptors();
+    });
+    await t.test('thinking-only remote models without usable efforts load and omit reasoning', async () => {
+      const vendor = { ...vendors[1], model: 'kimi-for-coding-highspeed' }, captured = [];
+      agent.get('https://api.kimi.com').intercept({ method: 'GET', path: '/coding/v1/models',
+        headers: { authorization: `Bearer ${accessFor(vendor.id)}` } }).reply(200, { data: [{
+          id: vendor.model, display_name: 'K2.7 Code Highspeed', context_length: 262144, supports_reasoning: true,
+          supports_image_in: true, supports_video_in: true, supports_thinking_type: 'only', reasoning: { type: 'only' },
+        }] });
+      assert.deepEqual(await runtime.tool.execute({ action: 'models', provider: vendor.id }, exec), { ok: true });
+      const list = await runtime.adapter.listModels(vendor.route);
+      assert.deepEqual(list.map(item => item.id), [vendor.model]);
+      const resolved = await runtime.adapter.resolveModel(vendor.route, vendor.model);
+      assert.equal(resolved.context.contextWindow, 262144);
+      assert.deepEqual(resolved.inputModalities, ['text', 'image']);
+      assert.equal(resolved.reasoning, undefined, 'unusable effort metadata must not hide the provider');
+      inference(vendor, captured);
+      await successful(runtime.adapter.stream(optionsFor(vendor)));
+      assert.equal(captured[0].body.thinking, undefined);
+      assert.equal(captured[0].body.reasoning_effort, undefined);
       metadata(vendor.id);
       assert.deepEqual(await runtime.tool.execute({ action: 'models', provider: vendor.id }, exec), { ok: true });
       agent.assertNoPendingInterceptors();

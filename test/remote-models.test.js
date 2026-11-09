@@ -33,7 +33,8 @@ test('Kimi discovers new IDs after official OAuth refresh without stable account
       think_efforts: { support: true, valid_efforts: ['low', 'high', 'max'], default_effort: 'high' } },
     { id: 'k3.1-pro-highspeed', context_length: 1048576, supports_reasoning: true,
       reasoning: { type: 'only', effort: { valid: ['low', 'high', 'max'], default: 'max' } } },
-    { id: 'kimi-for-coding-highspeed', context_length: 262144, supports_reasoning: false },
+    { id: 'kimi-for-coding-highspeed', display_name: 'K2.7 Code Highspeed', context_length: 262144, supports_reasoning: true,
+      supports_image_in: true, supports_video_in: true, supports_thinking_type: 'only', reasoning: { type: 'only' } },
     { id: 'future-kimi', context_length: 2000000, supports_reasoning: false },
   ] }));
   await f.catalog.ensure();
@@ -47,7 +48,14 @@ test('Kimi discovers new IDs after official OAuth refresh without stable account
   assert.equal(models[0].defaultReasoningEffort, 'high');
   assert.equal(models[1].thinkingLevelMap.low, 'low');
   assert.equal(models[2].thinkingLevelMap.high, null);
+  assert.equal(models[2].reasoning, false, 'thinking-only without declared efforts exposes no selectable level');
+  assert.equal(models[2].defaultReasoningEffort, undefined);
   assert.equal(models[3].reasoning, false);
+  // Harness rejects reasoning metadata with an empty effort list and drops the provider;
+  // every reasoning descriptor must still expose at least one selectable level.
+  for (const model of models) if (model.reasoning) {
+    assert.ok(Object.values(model.thinkingLevelMap).some(level => level !== null), `${model.id} must expose a selectable effort`);
+  }
   assert.deepEqual(models[3].input, ['text']);
   assert.equal(f.requests[0].url, 'https://api.kimi.com/coding/v1/models');
   assert.equal(f.requests[0].options.method, 'GET');
@@ -112,6 +120,25 @@ test('remote capability constraints override unsafe effort and modality declarat
   ] }) : Response.json({ data: [{ id: 'audio-only', context_length: 100000 }] }));
   await grok.catalog.ensure();
   assert.deepEqual(grok.catalog.getModels(), []);
+});
+
+// small/regression — unusable effort declarations must never expose empty reasoning metadata.
+test('remote effort declarations that cannot be selected never advertise reasoning', async () => {
+  const kimi = fixture('kimi-coding', async () => Response.json({ data: [{ id: 'unknown-effort', context_length: 100000,
+    supports_reasoning: true, think_efforts: { support: true, valid_efforts: ['turbo'], default_effort: 'turbo' } }] }));
+  await kimi.catalog.ensure();
+  const [unknownKimi] = kimi.catalog.getModels();
+  assert.equal(unknownKimi.reasoning, false);
+  assert.equal(unknownKimi.defaultReasoningEffort, undefined);
+  assert.deepEqual(Object.values(unknownKimi.thinkingLevelMap), Array(7).fill(null));
+  const grok = fixture('xai', async url => url.endsWith('/language-models') ? Response.json({ models: [
+    { id: 'unknown-effort', input_modalities: ['text'], output_modalities: ['text'] },
+  ] }) : Response.json({ data: [{ id: 'unknown-effort',
+    capabilities: { reasoning_effort: ['turbo'], default_reasoning_effort: 'turbo' } }] }));
+  await grok.catalog.ensure();
+  const [unknownGrok] = grok.catalog.getModels();
+  assert.equal(unknownGrok.reasoning, false);
+  assert.equal(unknownGrok.defaultReasoningEffort, undefined);
 });
 
 // small/spec — metadata failures never substitute an SDK list or expose upstream diagnostics.

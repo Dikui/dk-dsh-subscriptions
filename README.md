@@ -70,7 +70,7 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 
 - [models.js](<models.js>) 统一处理描述校验、60 秒内存缓存、并发合并、超时、取消、账号隔离及失败状态。[model-sources.js](<model-sources.js>) 仅处理厂商端点、字段映射和目录范围；三个厂商使用同一生命周期。
 - **OpenAI**：`GET https://chatgpt.com/backend-api/codex/models`，使用共享 OAuth、账号标识与已安装 SDK 版本，过滤不可显示/不支持 API 的模型。
-- **Kimi**：`GET https://api.kimi.com/coding/v1/models`，遵循[官方 CLI 的模型发现接口](https://github.com/MoonshotAI/kimi-cli/blob/main/src/kimi_cli/auth/platforms.py)。名称、上下文、图像和思考档位读取远端声明，包括 K3.1 Pro 及高速版；只支持思考时不提供 off，默认档位同步到选择器和调用。视频目前不声明为 Harness 输入能力。参见[模型说明](https://www.kimi.com/code/docs/kimi-code/models.html)。
+- **Kimi**：`GET https://api.kimi.com/coding/v1/models`，遵循[官方 CLI 的模型发现接口](https://github.com/MoonshotAI/kimi-cli/blob/main/src/kimi_cli/auth/platforms.py)。名称、上下文、图像和思考档位读取远端声明，包括 K3.1 Pro 及高速版；只支持思考时不提供 off，默认档位同步到选择器和调用。只支持思考但没有声明任何可用档位的模型不声明思考控制（Harness 拒绝空档位列表，会连带隐藏整个厂商），按厂商默认行为思考。视频目前不声明为 Harness 输入能力。参见[模型说明](https://www.kimi.com/code/docs/kimi-code/models.html)。
 - **Grok**：用现有共享 OAuth 读取 `https://api.x.ai/v1/models`，与 `/v1/language-models` 按精确 ID 合并，排除生成图片/视频和不支持客户端 function tools 的 multi-agent。参考[模型接口](https://docs.x.ai/developers/rest-api-reference/inference/models.md)及[multi-agent 限制](https://docs.x.ai/developers/model-capabilities/text/multi-agent.md)。当前账号的两次 GET 已返回 200，但这只是远端 API 目录，`scope: vendor` **不代表逐模型订阅权限或仅扣订阅费用已验证**；不冒充 Grok Build 客户端，不切换到 CLI proxy 推理路由。
 - 设置页、各主会话独立路由、模型解析、prepared call 和测试共用远端名单。SDK 只提供传输契约及精确同 ID 的缺失元数据，不混入静态名称或自行扩展别名。未知模型缺少输出上限时采用本地 16,384 token 生成上限（不是服务端能力声明）；缺少上下文时保守采用 32,768。
 - 启动和授权成功后自动同步，列表/状态/调用在缓存过期后重查，显式刷新跳过缓存；没有后台轮询计时器。共享同步任务覆盖官方 OAuth 解析和目录请求，合计限时 10 秒，失败同样缓存 60 秒；缓存命中只在本地核对凭证指纹。单个调用方取消不伤共享请求；退出、凭证变化或卸载使旧结果失效。prepared call 保留已校验的元数据。
