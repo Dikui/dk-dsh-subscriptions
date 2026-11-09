@@ -61,7 +61,7 @@ test('registered subscription routes preserve their native runtime contracts', {
       emitAdaptersUpdated() {}, stream: () => assert.fail('No inference in metadata tests'),
     };
     await apply({ credentials,
-      on(event, callback) { assert.equal(event, 'dispose'); dispose.push(callback); }, get() {},
+      effect(callback) { const cleanup = callback(); if (cleanup) dispose.push(cleanup); }, get() {},
       authorization: { describe: () => ({ methods: [{ id: 'oauth' }] }), begin: () => assert.fail('No login in offline tests') },
       llm, connection: { fetch: { register() {} } }, tools: { register(value) { tools.set(value.name, value); } },
     });
@@ -94,7 +94,7 @@ test('registered subscription routes preserve their native runtime contracts', {
         type: 'oauth', access: 'SYNTHETIC-KIMI-TOOLS', expires: Date.now() + 3600000,
       } });
       await apply({ credentials,
-        on(event, callback) { assert.equal(event, 'dispose'); dispose.push(callback); },
+        effect(callback) { const cleanup = callback(); if (cleanup) dispose.push(cleanup); },
         get: () => ({ async saveFile(value) { saved.push(value); return { attachmentId: 'SYNTHETIC-REF', name: value.name, bytes: value.data.length }; } }),
         authorization: { describe: () => ({ methods: [{ id: 'oauth' }] }) },
         llm: { registerAdapter() {}, emitAdaptersUpdated() {}, stream: () => assert.fail('Datasource must not enter inference') },
@@ -128,7 +128,7 @@ test('registered subscription routes preserve their native runtime contracts', {
       records.set(key, { kind: 'grant', payload: { type: 'oauth', access: 'SYNTHETIC-SEARCH-EXPIRED',
         refresh: 'SYNTHETIC-SEARCH-REFRESH', expires: 0 } });
       await apply({ credentials,
-        on(event, callback) { assert.equal(event, 'dispose'); dispose.push(callback); },
+        effect(callback) { const cleanup = callback(); if (cleanup) dispose.push(cleanup); },
         get: () => ({ async saveFile(value) { saved.push(value); return { attachmentId: 'SYNTHETIC-REF', name: value.name, bytes: value.data.length }; } }),
         authorization: { describe: () => ({ methods: [{ id: 'oauth' }] }) },
         llm: { registerAdapter() {}, emitAdaptersUpdated() {}, stream: () => assert.fail('X Search must be independent of main inference') },

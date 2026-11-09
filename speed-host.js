@@ -13,7 +13,7 @@ export async function createSpeedHost(ctx, { adapterUrl, modelFor, isConversatio
   const domain = await ctx.storageDomain.open(defineDomain({ name: 'dk_subscription_speed', version: 1, layout: 'per-record',
     tables: { sessions: domainTable(z.object({ sessionId: z.string().max(200), choices: z.array(choice).max(1000) }).strict()) },
   }));
-  ctx.on('dispose', () => domain.close());
+  ctx.effect(() => () => domain.close());
   const table = domain.table('sessions');
   const key = id => createHash('sha256').update(id).digest('hex');
   const selections = createSpeedSelections({
@@ -36,7 +36,7 @@ export async function createSpeedHost(ctx, { adapterUrl, modelFor, isConversatio
   });
   ctx.on('agent/pre-step', async ({ agent, modelSelection, signal }, next) => {
     const decision = await next();
-    if (decision.kind !== 'reject' && !signal.aborted) selections.beginStep(agent.session.id, modelSelection);
+    if (decision.kind !== 'reject' && !signal.aborted) await selections.beginStep(agent.session.id, modelSelection, signal);
     return decision;
   });
   ctx.on('agent/disposed', ({ agent }) => selections.endSession(agent.session.id));

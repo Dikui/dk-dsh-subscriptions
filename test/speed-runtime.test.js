@@ -37,7 +37,8 @@ test('session Speed survives native streamSimple conversion into the actual Code
         assert.match(key, /^[a-f0-9]{64}$/); spec.tables.sessions.valueSchema.parse(value); stored.set(key, value);
       } }), close() {} };
     } },
-    on(name, listener) { if (name === 'dispose') disposers.push(listener); else listeners.set(name, listener); },
+    effect(callback) { const dispose = callback(); if (dispose) disposers.push(dispose); },
+    on(name, listener) { listeners.set(name, listener); },
     connection: { fetch: { register: value => routes.set(value.path, value.fetch) } },
   };
   async function request(action, sessionId, tier, confirmed) {
@@ -81,10 +82,12 @@ test('session Speed survives native streamSimple conversion into the actual Code
     await Promise.all(injections);
     adapter.config.profiles().get(provider).transport = 'sse';
     let state = await request('speed-state', 'session-a'); assert.equal(state.status, 200);
-    assert.deepEqual((await state.json()).tiers.map(tier => tier.id), ['default', 'priority', 'ultrafast']);
+    const codexState = await state.json();
+    assert.equal(codexState.source, 'model');
+    assert.deepEqual(codexState.tiers.map(tier => tier.id), ['default', 'priority', 'ultrafast']);
     assert.equal((await request('speed-select', 'session-a', 'priority', false)).status, 400);
     assert.equal((await request('speed-select', 'session-a', 'flex', true)).status, 400);
-    assert.equal((await request('speed-select', 'session-a', 'priority', true)).status, 200);
+    assert.equal((await request('speed-select', 'session-a', 'fast', true)).status, 200);
     await boundary('session-a'); await boundary('session-b');
     mock.get('https://chatgpt.com').intercept({ method: 'POST', path: '/backend-api/codex/responses' }).reply(200, async ({ body, headers }) => {
       const bytes = Buffer.from(await new Response(body).arrayBuffer());
@@ -122,8 +125,12 @@ test('session Speed survives native streamSimple conversion into the actual Code
     records.set(native.recordKeyFor('xai'), { kind: 'grant', payload: { type: 'oauth', access: 'SYNTHETIC-GROK', expires: Date.now() + 3600000 } });
     selected.set('session-b', { provider: grokProvider, model: grokModel });
     const grokState = await request('speed-state', 'session-b');
-    assert.deepEqual((await grokState.json()).tiers.map(tier => tier.id), ['default', 'priority']);
-    assert.equal((await request('speed-select', 'session-b', 'priority', true)).status, 200);
+    const requestState = await grokState.json();
+    assert.equal(requestState.source, 'request');
+    assert.deepEqual(requestState.tiers.map(tier => tier.id), ['default', 'priority']);
+    const grokSelected = await request('speed-select', 'session-b', 'fast', true);
+    assert.equal(grokSelected.status, 200);
+    assert.equal((await grokSelected.json()).selected, 'priority', 'HTTP accepts an alias but exposes only the canonical choice');
     await boundary('session-b');
     let grokBody;
     mock.get('https://api.x.ai').intercept({ method: 'POST', path: '/v1/responses' }).reply(200, async ({ body }) => {
@@ -134,6 +141,34 @@ test('session Speed survives native streamSimple conversion into the actual Code
     await Array.fromAsync(listeners.get('llm/stream')(grokOptions, () => adapter.stream({ ...grokOptions })));
     assert.equal(grokBody.service_tier, 'priority');
     assert.equal(grokBody.model, grokModel);
+    // No capability keeps the original default request, regardless of a model
+    // name or a stale sidecar choice. This is not a model-switching mechanism.
+    const kimiProvider = 'subscription-kimi-coding';
+    const kimiModel = 'kimi-for-coding';
+    records.set(native.recordKeyFor('kimi-coding'), { kind: 'grant', payload: { type: 'oauth', access: 'SYNTHETIC-KIMI', expires: Date.now() + 3600000 } });
+    selected.set('session-b', { provider: kimiProvider, model: kimiModel });
+    const defaultState = await request('speed-state', 'session-b');
+    const kimiState = await defaultState.json();
+    assert.equal(kimiState.source, 'default');
+    assert.equal(kimiState.selected, 'default');
+    assert.deepEqual(kimiState.tiers.map(tier => tier.id), ['default']);
+    assert.equal((await request('speed-select', 'session-b', 'priority', true)).status, 400);
+    let kimiBody;
+    mock.get('https://api.kimi.com').intercept({ method: 'POST', path: '/coding/v1/chat/completions' }).reply(200, async ({ body }) => {
+      kimiBody = JSON.parse(await new Response(body).text());
+      return `data: ${JSON.stringify({ id: 'chat_synthetic', object: 'chat.completion.chunk', model: kimiModel,
+        choices: [{ index: 0, delta: { role: 'assistant', content: 'ok' }, finish_reason: null }] })}\n\ndata: ${JSON.stringify({
+        id: 'chat_synthetic', object: 'chat.completion.chunk', model: kimiModel,
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      })}\n\ndata: [DONE]\n\n`;
+    }, { headers: { 'content-type': 'text/event-stream' } });
+    await boundary('session-b');
+    const kimiOptions = markAgentLoopRequest({ provider: kimiProvider, model: kimiModel, sessionId: 'session-b', maxTokens: 16,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'Synthetic' }] }] });
+    const kimiChunks = await Array.fromAsync(listeners.get('llm/stream')(kimiOptions, () => adapter.stream({ ...kimiOptions })));
+    assert.ok(kimiChunks.some(chunk => chunk.type === 'finish' && chunk.reason.kind === 'stop'), JSON.stringify(kimiChunks));
+    assert.equal(kimiBody.model, kimiModel);
+    assert.equal(Object.hasOwn(kimiBody, 'service_tier'), false);
     mock.assertNoPendingInterceptors();
   } catch (error) { console.error(error); throw error; }
   finally {

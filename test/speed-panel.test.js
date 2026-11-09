@@ -19,7 +19,8 @@ function fixture() {
       return Response.json({ sessionId: input.sessionId, provider: input.provider, model: input.model,
         selected: saved.get(key) ?? 'default', stale: false,
         tiers: input.model === 'tiered-model' ? [{ id: 'default', name: 'Normal' }, { id: 'priority', name: 'Fast' }, { id: 'ultrafast', name: 'Ultrafast' }]
-          : [{ id: 'default', name: 'Normal' }],
+          : input.provider === 'subscription-xai' ? [{ id: 'default', name: 'Normal' }, { id: 'priority', name: 'Priority' }]
+            : [{ id: 'default', name: 'Normal' }],
       });
     },
   };
@@ -39,6 +40,30 @@ test('selecting Fast or Ultrafast saves directly without a confirmation popup', 
         assert.equal(confirmations, 0);
         assert.equal(server.calls.filter(call => call.action === 'speed-select').length, 1);
         assert.equal(panel.nodes().find(node => node.type === 'select').props.value, tier);
+      } finally { panel.dispose(); }
+    }
+  }
+});
+
+// small/regression — reported missing Speed: default-only metadata must not remove the indicator.
+test('default-only models retain a visible speed indicator without offering invented tiers', async () => {
+  for (const [provider, model] of [
+    ['subscription-openai-codex', 'default-codex-model'],
+    ['subscription-kimi-coding', 'kimi-for-coding'],
+  ]) {
+    for (const language of ['en', 'zh']) {
+      const server = fixture(); server.setModel(provider, model);
+      const panel = await panelHarness({ ...server, language });
+      try {
+        const select = panel.nodes().find(node => node.type === 'select');
+        assert.ok(select, 'default speed remains visible');
+        assert.equal(panel.text(panel.nodes().find(node => node.props.className === 'sl-speed-value')), language === 'en' ? 'Normal' : '正常');
+        assert.equal(select.props.disabled, true);
+        assert.equal(select.props.children.length, 1);
+        assert.equal(select.props.value, 'default');
+        assert.equal(panel.nodes().some(node => node.props.className === 'sl-speed-chevron'), false);
+        assert.equal(panel.nodes().some(node => node.type === 'label'), false);
+        assert.equal(server.calls.some(call => call.action === 'speed-select'), false);
       } finally { panel.dispose(); }
     }
   }
@@ -100,9 +125,33 @@ test('a late save response cannot replace the newly selected model’s Speed', a
     server.setModel('subscription-kimi-coding', 'kimi-model'); await panel.rerender();
     pending.resolve(); await savingWork; await panel.flush();
     const select = panel.nodes().find(node => node.type === 'select');
-    assert.ok(select); assert.equal(select.props.value, 'default'); assert.equal(select.props.children.length, 1);
+    assert.ok(select, 'keep the default speed indicator after switching to a model with no extra tiers');
+    assert.equal(select.props.value, 'default');
+    assert.equal(select.props.disabled, true);
     assert.equal(panel.nodes().some(node => node.type === 'button'), false);
   } finally { pending.resolve(); panel.dispose(); }
+});
+
+// small/spec — user clarification: the host's resolved capability, not a client vendor list, owns the control.
+test('the toolbar uses resolved Speed tiers for both model and request capability sources', async () => {
+  const server = fixture(), panel = await panelHarness(server);
+  try {
+    server.setModel('subscription-xai', 'grok-model'); await panel.rerender();
+    let select = panel.nodes().find(node => node.type === 'select');
+    assert.deepEqual(select.props.children.map(node => panel.text(node)), ['Normal', 'Priority']);
+    await select.props.onChange({ target: { value: 'priority' } }); await panel.flush();
+    assert.equal(panel.nodes().find(node => node.type === 'select').props.value, 'priority');
+    server.setModel('subscription-another-vendor', 'tiered-model'); await panel.rerender();
+    select = panel.nodes().find(node => node.type === 'select');
+    assert.ok(select, 'a host-advertised model capability needs no additional client vendor entry');
+    assert.deepEqual(select.props.children.map(node => node.props.value), ['default', 'priority', 'ultrafast']);
+    server.setModel('subscription-kimi-coding', 'kimi-for-coding'); await panel.rerender();
+    select = panel.nodes().find(node => node.type === 'select');
+    assert.equal(select.props.value, 'default');
+    assert.equal(select.props.disabled, true);
+    assert.equal(panel.nodes().some(node => node.props.className === 'sl-speed-chevron'), false);
+    assert.equal(server.calls.at(-1).action, 'speed-state');
+  } finally { panel.dispose(); }
 });
 
 test('changing models never reuses another model’s Speed options or selection', async () => {
@@ -110,11 +159,12 @@ test('changing models never reuses another model’s Speed options or selection'
   try {
     await panel.nodes().find(node => node.type === 'select').props.onChange({ target: { value: 'priority' } }); await panel.flush();
     server.setModel('subscription-kimi-coding', 'kimi-model'); await panel.rerender();
-    let select = panel.nodes().find(node => node.type === 'select');
-    assert.equal(select.props.disabled, true); assert.equal(select.props.value, 'default');
-    assert.equal(select.props.children.length, 1);
+    const defaultSelect = panel.nodes().find(node => node.type === 'select');
+    assert.equal(defaultSelect.props.value, 'default');
+    assert.equal(defaultSelect.props.children.length, 1, 'Kimi does not inherit Codex tiers');
+    assert.equal(defaultSelect.props.disabled, true);
     server.setModel('subscription-openai-codex', 'tiered-model'); await panel.rerender();
-    select = panel.nodes().find(node => node.type === 'select');
+    const select = panel.nodes().find(node => node.type === 'select');
     assert.equal(select.props.value, 'priority');
     server.setModel('unrelated-api-provider', 'other-model'); await panel.rerender();
     assert.equal(panel.tree, null);

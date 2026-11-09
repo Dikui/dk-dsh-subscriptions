@@ -53,12 +53,18 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 模型选择器旁仅显示当前速度档位，不显示额外的「Speed」标题。选择按会话、提供商、模型和凭证作用域保存；从下一模型步骤生效，重试保持该步骤的选择。用户选择档位后直接保存，不弹出二次确认；可能增加额度或费用的说明保留在档位提示中。不修改推理强度、不切换认证方式，不向工具的辅助模型请求继承速度选择。
 
 - **Codex**：读取账号目录的 `service_tiers`，保留实际档位 ID、名称和说明；兼容旧 `additional_speed_tiers: ["fast"]` → `priority`。正常档位不发送 `service_tier`，不会自动应用目录中可能增加消耗的默认值。未知或下线档位不猜测替代。依据：[官方模型能力定义](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs)、[速度说明](https://developers.openai.com/codex/speed/)。
-- **Grok**：文本 Responses 模型提供正常／Priority，按[官方 Priority Processing 契约](https://docs.x.ai/developers/advanced-api-usage/priority-processing.md)发送 `service_tier: "priority"`。它是溢价排队优先级，不是 Grok Build Fast；实际是否获批由服务端决定。OAuth 套餐权益和仅扣订阅额度仍未验证，档位提示保留此说明，不自动付费重试或回退。
-- **Kimi**：按[官方模型说明](https://www.kimi.com/code/docs/kimi-code/models.html)，速度由模型 ID 决定而非通用 `service_tier`。高速模型显示 Highspeed；普通模型显示正常。当前 `kimi-for-coding`（K2.8）和 `kimi-for-coding-highspeed`（K2.7）不是同一模型，不能伪造档位互换。SDK 未收录的 K3.1 模型不自动捏造传输描述。
+- **Grok**：文本 Responses 模型提供正常／Priority，按[官方 Priority Processing 契约](https://docs.x.ai/developers/advanced-api-usage/priority-processing.md)发送 `service_tier: "priority"`，并按[官方接口定义](https://docs.x.ai/developers/rest-api-reference/inference/chat-completions.md)兼容 `fast` 别名，不重复提供两个档位。该参数不保证进入 Grok Build 的独立 Fast 部署；实际是否获批由服务端决定。OAuth 套餐权益和仅扣订阅额度仍未验证，档位提示保留此说明，不自动付费重试或回退。
+- **Kimi 等未声明速度能力的模型**：始终使用默认速度，不发送速度参数；已有保存值也不能启用不存在的档位。不根据模型 ID 推导速度，不提供模型切换。
 
-通用能力由 [speed.js](<speed.js>) 的厂商能力适配、会话选择和请求快照组成；[speed-host.js](<speed-host.js>) 使用宿主的独立 storageDomain sidecar 保存，不写入提示词或实验性会话事件。sidecar 不随会话导出或分叉自动复制，子会话从正常档位开始。更换凭证作用域不会继承高消耗选择。前端选择是所请求的档位，不代表服务端保证达到对应速度。
+所有模型共用一条能力解析路线：**模型声明 → 有明确提供商／接口／模型类型适用范围的接口能力 → 默认速度**。两种来源都经过同一套档位校验、去重和别名归一化；别名只在声明它的能力内有效，有冲突时拒绝匹配，不因接口协议名相同就推断支持。模型显式声明空列表或仅默认时，不再继承接口级的额外档位。选择、保存、历史值读取和请求快照共用规范档位 ID，`fast` 与 `priority` 不会因别名关系变成两个选项。解析本身不发起推理请求、不消耗推理 token。
 
-本地更新后需完全退出并重启 DSH；仅刷新网页不会加载新的后台逻辑。已完成离线请求捕获与事件测试，不代表厂商真实账号权益已验证。
+界面只消费解析结果，不按厂商名称排除模型；始终保留当前速度显示，没有其他档位时显示默认速度、禁用切换，不再隐藏整个控件。
+
+通用能力由 [speed.js](<speed.js>) 的模型／请求能力解析、会话选择和请求快照组成；[speed-host.js](<speed-host.js>) 使用宿主的独立 storageDomain sidecar 保存，不写入提示词或实验性会话事件。sidecar 不随会话导出或分叉自动复制，子会话从正常档位开始。更换凭证作用域不会继承高消耗选择。前端选择是所请求的档位，不代表服务端保证达到对应速度。
+
+速度存储、请求快照引用和网络清理由 Cordis effect 生命周期管理，卸载时释放后才能重新加载，避免存储域仍被占用导致速度路由 404。插件加载会等待速度模块初始化，初始化错误不再被后台子模块静默吞掉。真实 Cordis／DomainFacility／Connection 的离线回归覆盖卸载后重新注册速度路由。
+
+本地更新后需完全退出并重启 DSH；仅刷新网页不会加载新的后台逻辑，旧进程中已泄漏的存储域也需要重启释放。已完成离线请求捕获与事件测试，不代表厂商真实账号权益已验证。
 
 ## 账号模型列表
 

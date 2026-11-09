@@ -220,7 +220,9 @@ window.__ModuleLoader__.load({
           const state = React.useSyncExternalStore(fn => directory.subscribe(fn), () => directory.getSnapshot());
           const current = state.current;
           const provider = current?.provider, model = current?.model;
-          const supported = ['subscription-openai-codex', 'subscription-kimi-coding', 'subscription-xai'].includes(provider);
+          // The host resolves model-declared and request-level capabilities.
+          // The client only scopes this plugin to subscription routes.
+          const supported = typeof provider === 'string' && provider.startsWith('subscription-') && typeof model === 'string';
           const [speed, setSpeed] = React.useState(null);
           const [error, setError] = React.useState(null);
           const [busy, setBusy] = React.useState(false);
@@ -254,8 +256,8 @@ window.__ModuleLoader__.load({
             if (supported) refresh();
             return () => { generation.current++; active.current?.abort(); };
           }, [sessionId, provider, model, state.groups]);
-          if (!supported) return null;
           const currentSpeed = speed?.provider === provider && speed.model === model ? speed : null;
+          if (!supported) return null;
           const label = tier => tier.id === 'default' && tier.name === 'Normal' ? t('speedNormal') : tier.name;
           async function choose(tier) {
             if (busy || (tier === currentSpeed.selected && !currentSpeed.stale)) return;

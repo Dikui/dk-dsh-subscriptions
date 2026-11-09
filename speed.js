@@ -3,42 +3,67 @@ import { fail } from './core.js';
 const normal = Object.freeze({ id: 'default', name: 'Normal' });
 const validId = value => typeof value === 'string' && /^[a-z][a-z0-9_-]{0,63}$/.test(value);
 
-// Codex's account catalog is authoritative. Never inherit a template's tiers,
-// infer speed from a model name, or treat the catalog default as paid-mode consent.
-export function codexSpeed(row) {
-  const tiers = new Map([['default', normal]]);
-  if (Array.isArray(row.service_tiers)) {
-    for (const tier of row.service_tiers.slice(0, 32)) {
-      if (!validId(tier?.id) || tiers.has(tier.id)) continue;
-      tiers.set(tier.id, { id: tier.id,
-        name: typeof tier.name === 'string' && tier.name.trim() ? tier.name.slice(0, 80) : tier.id,
-        ...(typeof tier.description === 'string' && tier.description.trim() ? { description: tier.description.slice(0, 300) } : {}),
-      });
+// All capability sources use this contract: default is always available;
+// non-default ids are canonical wire values, aliases are explicit and scoped.
+function normalizeSpeed(capability) {
+  const tiers = new Map([['default', normal]]), aliases = new Map();
+  const rows = Array.isArray(capability?.tiers) ? capability.tiers : [];
+  // Reject oversized declarations instead of aliasing a truncated canonical id.
+  if (rows.length > 33) return { tiers: [normal] };
+  const declaredIds = new Set(rows.filter(tier => validId(tier?.id)).map(tier => tier.id));
+  for (const tier of rows) {
+    if (tiers.size >= 33) break;
+    if (!validId(tier?.id) || tiers.has(tier.id)) continue;
+    tiers.set(tier.id, { id: tier.id,
+      name: typeof tier.name === 'string' && tier.name.trim() ? tier.name.slice(0, 80) : tier.id,
+      ...(typeof tier.description === 'string' && tier.description.trim() ? { description: tier.description.slice(0, 300) } : {}),
+    });
+    aliases.set(tier.id, Array.isArray(tier.aliases) ? tier.aliases.slice(0, 32) : []);
+  }
+  const owners = new Map();
+  for (const [id, names] of aliases) {
+    for (const alias of names) {
+      if (!validId(alias) || alias === 'default' || declaredIds.has(alias)) continue;
+      if (!owners.has(alias)) owners.set(alias, id);
+      else if (owners.get(alias) !== id) owners.set(alias, null);
     }
   }
-  if (!tiers.has('priority') && Array.isArray(row.additional_speed_tiers) && row.additional_speed_tiers.includes('fast')) {
-    tiers.set('priority', { id: 'priority', name: 'Fast' }); // Official legacy fast -> priority mapping.
+  for (const tier of tiers.values()) {
+    const names = [...owners].filter(([, id]) => id === tier.id).map(([alias]) => alias);
+    if (names.length) tier.aliases = names;
   }
   return { tiers: [...tiers.values()] };
 }
 
-// Provider adapters describe capabilities; selection/persistence/UI consume one
-// shared shape. Protocol support alone never invents a model's available tiers.
-const speedSources = new Map([
-  ['subscription-openai-codex', model => model.speed ?? { tiers: [normal] }],
-  ['subscription-xai', model => model.api === 'openai-responses' && model.type === 'chat'
-    ? { tiers: [normal, { id: 'priority', name: 'Priority',
-      description: 'Premium scheduling; OAuth entitlement and subscription-only billing unverified. Not Grok Build Fast.' }] }
-    : { tiers: [normal] }],
-  ['subscription-kimi-coding', model => ({ tiers: [model.id === 'kimi-for-coding-highspeed' || model.id === 'k3.1-pro-highspeed'
-    ? { id: 'default', name: 'Highspeed', description: 'This exact Kimi model is already the highspeed version; speed is selected by model ID.' }
-    : normal] })],
-]);
+// Catalog adapters only translate source data, never choose the resolution path.
+// Never inherit a template's tiers or treat a paid catalog default as consent.
+export function codexSpeed(row) {
+  if (Array.isArray(row.service_tiers) && row.service_tiers.length > 33) return { tiers: [normal] };
+  const tiers = Array.isArray(row.service_tiers) ? [...row.service_tiers] : [];
+  if (!tiers.some(tier => tier?.id === 'priority') && Array.isArray(row.additional_speed_tiers) && row.additional_speed_tiers.includes('fast')) {
+    tiers.unshift({ id: 'priority', name: 'Fast' }); // Official legacy fast -> priority mapping.
+  }
+  return normalizeSpeed({ tiers: tiers.map(tier => tier?.id === 'priority' ? { ...tier, aliases: ['fast'] } : tier) });
+}
+
+// Verified interface contracts are data with explicit applicability, not a
+// second vendor-specific resolver. A shared API name alone proves nothing.
+const requestSpeedCapabilities = [
+  { appliesTo: { provider: 'subscription-xai', api: 'openai-responses', type: 'chat' },
+    speed: { tiers: [{ id: 'priority', name: 'Priority', aliases: ['fast'],
+      description: 'Premium scheduling; OAuth entitlement and subscription-only billing unverified. Not Grok Build Fast.' }] } },
+];
 
 export function modelSpeed(model) {
-  const source = speedSources.get(model?.provider);
-  if (source) return source(model);
-  return model?.provider === 'openai-codex' ? model.speed ?? { tiers: [normal] } : { tiers: [normal] };
+  // Even an empty/invalid explicit declaration must not enable a broader fallback.
+  if (model?.speed !== undefined) return { ...normalizeSpeed(model.speed), source: 'model' };
+  const request = requestSpeedCapabilities.find(({ appliesTo }) => Object.entries(appliesTo).every(([key, value]) => model?.[key] === value));
+  return { ...normalizeSpeed(request?.speed), source: request ? 'request' : 'default' };
+}
+
+function canonicalTier(speed, value) {
+  const exact = speed.tiers.find(tier => tier.id === value);
+  return (exact ?? speed.tiers.find(tier => tier.aliases?.includes(value)))?.id;
 }
 
 // One interface owns validation, durable per-session/model selection and request
@@ -61,24 +86,25 @@ export function createSpeedSelections({ read, write, modelFor, sessionExists, va
     check(input);
     const model = await modelFor(input.provider, input.model, signal);
     if (!model) fail('UNKNOWN_MODEL');
-    const speed = modelSpeed(model), wanted = selected(input, model);
+    const speed = modelSpeed(model), wanted = speed.tiers.length > 1 ? selected(input, model) : 'default';
+    const tier = canonicalTier(speed, wanted);
     return { sessionId: input.sessionId, provider: input.provider, model: input.model,
-      tiers: speed.tiers, selected: speed.tiers.some(tier => tier.id === wanted) ? wanted : 'default',
-      stale: !speed.tiers.some(tier => tier.id === wanted) };
+      source: speed.source, tiers: speed.tiers, selected: tier ?? 'default', stale: tier === undefined };
   }
   async function select(input, signal) {
     const current = await state({ sessionId: input.sessionId, provider: input.provider, model: input.model }, signal);
-    if (!current.tiers.some(tier => tier.id === input.tier)) fail('UNSUPPORTED_SPEED');
-    if (input.tier !== 'default' && input.confirmed !== true) fail('SPEED_CONFIRMATION_REQUIRED');
+    const tier = canonicalTier(current, input.tier);
+    if (tier === undefined) fail('UNSUPPORTED_SPEED');
+    if (tier !== 'default' && input.confirmed !== true) fail('SPEED_CONFIRMATION_REQUIRED');
     const previous = pending.get(input.sessionId) ?? Promise.resolve();
     const operation = previous.catch(() => {}).then(async () => {
       signal?.throwIfAborted();
       check(input);
       const choices = (read(input.sessionId)?.choices ?? []).filter(choice => key(choice.provider, choice.model) !== key(input.provider, input.model));
-      if (input.tier !== 'default') {
+      if (tier !== 'default') {
         const descriptor = await modelFor(input.provider, input.model, signal);
-        if (!modelSpeed(descriptor).tiers.some(tier => tier.id === input.tier)) fail('UNSUPPORTED_SPEED');
-        choices.push({ provider: input.provider, model: input.model, tier: input.tier,
+        if (canonicalTier(modelSpeed(descriptor), input.tier) !== tier) fail('UNSUPPORTED_SPEED');
+        choices.push({ provider: input.provider, model: input.model, tier,
           ...(descriptor.speedAccount ? { account: descriptor.speedAccount } : {}) });
       }
       if (choices.length > 1000) fail('SPEED_SELECTION_LIMIT');
@@ -94,21 +120,36 @@ export function createSpeedSelections({ read, write, modelFor, sessionExists, va
     state, select,
     // Called at the accepted step boundary; retries keep this value even if the
     // user changes Speed while the model is working. No selection leaks to tools.
-    beginStep(sessionId, selection) {
+    async beginStep(sessionId, selection, signal) {
       const input = { sessionId, provider: selection.provider, model: selection.model };
-      steps.set(sessionId, { ...input, ...choiceFor(input) });
+      const step = { ...input, ...choiceFor(input) };
+      steps.set(sessionId, step);
+      if (step.tier && step.tier !== 'default') {
+        const descriptor = await modelFor(input.provider, input.model, signal);
+        if (!descriptor) fail('UNKNOWN_MODEL');
+        const speed = modelSpeed(descriptor);
+        const tier = step.account === descriptor.speedAccount && speed.tiers.length > 1 ? canonicalTier(speed, step.tier) : 'default';
+        if (tier === undefined) fail('UNSUPPORTED_SPEED');
+        signal?.throwIfAborted();
+        if (steps.get(sessionId) === step) step.tier = tier;
+      }
     },
     endSession(sessionId) { steps.delete(sessionId); },
     capture(options, model) {
       const { sessionId, provider } = options;
       if (!sessionId || options.conversation !== true) return undefined;
+      const speed = modelSpeed(model);
+      if (speed.tiers.length < 2) return undefined; // No capability means an untouched default request.
       const step = steps.get(sessionId);
-      const tier = step?.provider === provider && step.model === model.id
+      const matches = step?.provider === provider && step.model === model.id;
+      const tier = matches
         ? step.account === model.speedAccount ? step.tier ?? 'default' : 'default'
         : selected({ sessionId, provider, model: model.id }, model);
-      if (!modelSpeed(model).tiers.some(choice => choice.id === tier)) fail('UNSUPPORTED_SPEED');
-      // Normal preserves standard Codex routing, never the elevated catalog default.
-      return model.api === 'openai-codex-responses' || model.provider === 'subscription-xai' ? tier : undefined;
+      // A step already owns a canonical id; aliases may only resolve unsnapshotted choices.
+      const canonical = matches ? speed.tiers.find(choice => choice.id === tier)?.id : canonicalTier(speed, tier);
+      if (canonical === undefined) fail('UNSUPPORTED_SPEED');
+      // Both capability adapters describe request tiers, never replacement models.
+      return canonical;
     },
   };
 }

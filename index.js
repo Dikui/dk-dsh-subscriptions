@@ -35,7 +35,7 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false }
   const network = await createAutoProxy(() => createRequire(adapterUrl)('undici'));
   const lifetime = new AbortController();
   let api;
-  ctx.on('dispose', () => {
+  ctx.effect(() => () => {
     lifetime.abort();
     api?.dispose();
     return network.dispose();
@@ -121,14 +121,17 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false }
     }
   }
   const adapter = new SubscriptionAdapter({ ...bindings, resolveAttachments: () => ctx.get('attachments') });
-  ctx.inject?.(['agents', 'storageDomain'], async scope => {
-    speedSelections = await createSpeedHost(scope, { adapterUrl, isConversation: isAgentLoopRequest,
+  await ctx.inject?.(['agents', 'storageDomain'], async scope => {
+    const selections = await createSpeedHost(scope, { adapterUrl, isConversation: isAgentLoopRequest,
       modelFor: async (provider, model, signal) => {
         await ensureAccountModels(provider, signal);
         return scopedSpeedModel(provider, adapter.modelOf(adapter.current(), provider, model));
       },
     });
-    scope.on('dispose', () => { speedSelections = undefined; });
+    scope.effect(() => {
+      speedSelections = selections;
+      return () => { if (speedSelections === selections) speedSelections = undefined; };
+    });
   });
   const routes = [...bindings.profiles().keys()];
   if (routes.length) ctx.llm.registerAdapter(routes, adapter);
