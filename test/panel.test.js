@@ -147,7 +147,9 @@ test('switching subpages preserves a running authorization', async () => {
 // small/spec — the two-subpage settings request must preserve the model chosen before navigation.
 test('switching subpages preserves the selected model', async () => {
   const state = initialStatus();
-  state.providers[1].models.push({ id: 'kimi-second', name: 'Second synthetic model' });
+  state.providers[1].configured = true;
+  state.providers[1].modelCatalog.state = 'ready';
+  state.providers[1].models = [{ id: 'kimi-first', name: 'First model' }, { id: 'kimi-second', name: 'Second synthetic model' }];
   const panel = await panelHarness({ fetch: async () => Response.json(state) });
   try {
     panel.within('Kimi Code').find(node => node.type === 'select').props.onChange({ target: { value: 'kimi-second' } });
@@ -327,8 +329,8 @@ test('Reopening the panel resumes a pending device flow without launching a tab 
 
 // small/spec — account model-list request: metadata refresh must not invoke inference.
 test('account model refresh replaces any registered vendor’s names without a model test', async () => {
-  // The Kimi account capability here is synthetic, not a production endpoint claim.
-  for (const [id, title] of [['openai-codex', 'OpenAI · ChatGPT'], ['kimi-coding', 'Kimi Code']]) {
+  // Synthetic responses replace the registered vendors' remote metadata.
+  for (const [id, title] of [['openai-codex', 'OpenAI · ChatGPT'], ['kimi-coding', 'Kimi Code'], ['xai', 'Grok']]) {
     const state = initialStatus(), calls = [], account = state.providers.find(provider => provider.id === id);
     account.configured = true; account.credentialKind = 'grant';
     account.models = [{ id: 'server-only', name: 'Server Model' }];
@@ -344,7 +346,7 @@ test('account model refresh replaces any registered vendor’s names without a m
     try {
       const card = () => panel.within(title);
       assert.equal(card().find(node => node.type === 'select').props.value, 'server-only');
-      await panel.click('Refresh account models · no inference quota', title);
+      await panel.click('Refresh model catalog · no inference request', title);
       assert.equal(card().find(node => node.type === 'select').props.value, 'server-new');
       assert.deepEqual(card().filter(node => node.type === 'option').map(node => node.props.value), ['server-new']);
       assert.deepEqual(calls, [{ provider: id, action: 'models' }]);
@@ -358,6 +360,7 @@ test('Grok warns about extra charges in both languages and tests only after conf
     const state = initialStatus(), posts = [], confirmations = [];
     const grok = state.providers.find(provider => provider.id === 'xai');
     grok.configured = true; grok.credentialKind = 'grant';
+    grok.modelCatalog.state = 'ready'; grok.models = [{ id: 'grok-test', name: 'Grok Test' }];
     let allowed = false;
     const panel = await panelHarness({ language, confirm: message => { confirmations.push(message); return allowed; },
       fetch: async (_url, options = {}) => {
@@ -370,7 +373,7 @@ test('Grok warns about extra charges in both languages and tests only after conf
       const billing = panel.within('Grok').find(node => node.type === 'details');
       assert.ok(billing && !billing.props.open);
       assert.match(panel.text(billing), warning);
-      assert.equal(panel.within('Grok').some(node => node.type === 'button' && /Refresh account models|刷新账号模型/.test(node.props.children.join(''))), false);
+      assert.equal(panel.within('Grok').some(node => node.type === 'button' && /Refresh model catalog|刷新模型目录/.test(node.props.children.join(''))), true);
       await panel.click(label, 'Grok');
       assert.match(confirmations[0], warning);
       assert.match(confirmations[0], /grok-test/);

@@ -93,7 +93,7 @@ export async function panelHarness({ fetch, open = () => null, clipboard, confir
 export function initialStatus(attempt = null, provider = 'kimi-coding') {
   return { providers: [
     { id: 'openai-codex', name: 'OpenAI · ChatGPT', route: 'subscription-openai-codex', available: true, configured: false, credentialKind: null, models: [], modelCatalog: { source: 'account', state: 'unloaded', error: null, updatedAt: null }, attempt: null },
-    { id: 'kimi-coding', name: 'Kimi Code', route: 'subscription-kimi-coding', available: true, configured: false, credentialKind: null, models: [{ id: 'kimi-test', name: 'Kimi Test' }], modelCatalog: { source: 'local', state: 'ready', error: null, updatedAt: null }, attempt: provider === 'kimi-coding' ? attempt : null },
-    { id: 'xai', name: 'Grok', route: 'subscription-xai', available: true, configured: false, credentialKind: null, models: [{ id: 'grok-test', name: 'Grok Test' }], modelCatalog: { source: 'local', state: 'ready', error: null, updatedAt: null }, attempt: provider === 'xai' ? attempt : null },
+    { id: 'kimi-coding', name: 'Kimi Code', route: 'subscription-kimi-coding', available: true, configured: false, credentialKind: null, models: [], modelCatalog: { source: 'account', state: 'unloaded', error: null, updatedAt: null }, attempt: provider === 'kimi-coding' ? attempt : null },
+    { id: 'xai', name: 'Grok', route: 'subscription-xai', available: true, configured: false, credentialKind: null, models: [], modelCatalog: { source: 'account', state: 'unloaded', error: null, updatedAt: null }, attempt: provider === 'xai' ? attempt : null },
   ] };
 }

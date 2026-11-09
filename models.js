@@ -24,29 +24,33 @@ function validatedModels(value) {
 
 // Sources provide an opaque account identity and normalized native model descriptors.
 // Identity is never public; one instance owns one vendor's cache and in-flight query.
-export function createAccountModels({ readIdentity, loadModels, onChange = () => {} }) {
+export function createAccountModels({ readIdentity, loadModels, scope = 'account', onChange = () => {} }) {
   let models = [], owner, generation = 0, flight, checkedAt = 0;
-  let state = { source: 'account', state: 'unloaded', error: null, updatedAt: null };
+  let identityController = new AbortController();
+  let state = { source: 'account', scope, state: 'unloaded', error: null, updatedAt: null };
   function clear() {
     generation++;
+    identityController.abort(new SubscriptionError('MODEL_CATALOG_CHANGED'));
+    identityController = new AbortController();
     flight?.controller.abort(new SubscriptionError('MODEL_CATALOG_CHANGED'));
     flight = undefined;
     owner = undefined;
     checkedAt = 0;
     const changed = models.length > 0;
     models = [];
-    state = { source: 'account', state: 'unloaded', error: null, updatedAt: null };
+    state = { source: 'account', scope, state: 'unloaded', error: null, updatedAt: null };
     if (changed) onChange();
   }
   async function ensure({ force = false, signal } = {}) {
     signal?.throwIfAborted();
     const readingGeneration = generation;
+    const identitySignal = AbortSignal.any([identityController.signal, AbortSignal.timeout(10000)]);
     let initial;
-    try { initial = await readIdentity(signal); }
-    catch {
+    try { initial = await waitFor(waitFor(Promise.resolve().then(() => readIdentity(identitySignal)), identitySignal), signal); }
+    catch (error) {
       signal?.throwIfAborted();
       if (readingGeneration !== generation) fail('MODEL_CATALOG_CHANGED');
-      clear(); fail('MODEL_CATALOG_FAILED');
+      clear(); fail(error instanceof SubscriptionError ? error.code : 'MODEL_CATALOG_FAILED');
     }
     signal?.throwIfAborted();
     if (readingGeneration !== generation) fail('MODEL_CATALOG_CHANGED');
@@ -62,16 +66,16 @@ export function createAccountModels({ readIdentity, loadModels, onChange = () =>
     flight = current;
     // A caller leaving must not cancel another caller's shared metadata query.
     const requestSignal = AbortSignal.any([current.controller.signal, AbortSignal.timeout(10000)]);
-    state = { source: 'account', state: 'loading', error: null, updatedAt: null };
+    state = { source: 'account', scope, state: 'loading', error: null, updatedAt: null };
     models = [];
     current.promise = (async () => {
-      const next = validatedModels(await loadModels({ identity: initial, signal: requestSignal }));
-      const latest = await readIdentity(requestSignal);
+      const next = validatedModels(await waitFor(loadModels({ identity: initial, signal: requestSignal }), requestSignal));
+      const latest = await waitFor(readIdentity(requestSignal), requestSignal);
       if (generation !== current.generation || latest !== initial) fail('MODEL_CATALOG_CHANGED');
       requestSignal.throwIfAborted();
       models = next;
       checkedAt = Date.now();
-      state = { source: 'account', state: 'ready', error: null, updatedAt: checkedAt };
+      state = { source: 'account', scope, state: 'ready', error: null, updatedAt: checkedAt };
       onChange();
     })().catch(error => {
       const code = generation !== current.generation ? 'MODEL_CATALOG_CHANGED'
@@ -79,7 +83,7 @@ export function createAccountModels({ readIdentity, loadModels, onChange = () =>
       if (generation === current.generation) {
         models = [];
         checkedAt = Date.now();
-        state = { source: 'account', state: 'error', error: code, updatedAt: null };
+        state = { source: 'account', scope, state: 'error', error: code, updatedAt: null };
         onChange();
       }
       throw new SubscriptionError(code); // Never expose bodies, headers, credentials or upstream messages.

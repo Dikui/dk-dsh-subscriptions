@@ -1,16 +1,16 @@
 # dk-subscriptions
 
-一个独立的、非官方订阅连接插件。复用 DeepSeek Harness 自带的 `@deepseek-ai/dsh-llm-pi-ai` OAuth、消息转换和推理协议；OpenAI 模型名称从账号模型接口获取，不再使用 SDK 静态目录充当账号列表。不复制 OAuth 协议，不修改 DSH 核心，不替换已有订阅插件。
+一个独立的、非官方订阅连接插件。复用 DeepSeek Harness 自带的 `@deepseek-ai/dsh-llm-pi-ai` OAuth、消息转换和推理协议；OpenAI、Kimi、Grok 共用远端模型目录自动同步，不再使用 SDK 静态目录充当可选模型列表。不复制 OAuth 协议，不修改 DSH 核心，不替换已有订阅插件。
 
 ## 首版范围
 
 | 厂商 | 接入范围 | 模型路由 |
 | --- | --- | --- |
 | OpenAI | ChatGPT / Codex OAuth，读取账号返回的模型列表 | `subscription-openai-codex` |
-| Kimi | Kimi Code 订阅，模型目录仍来自本地 SDK，非通用网页会员接口 | `subscription-kimi-coding` |
-| Grok | 复用官方 SDK 的 xAI OAuth，模型目录来自本地 SDK | `subscription-xai` |
+| Kimi | Kimi Code 订阅 OAuth，自动读取 Coding 模型目录及思考能力 | `subscription-kimi-coding` |
+| Grok | 复用官方 SDK 的 xAI OAuth，自动同步 API 远端文本模型目录 | `subscription-xai` |
 
-代码接入不代表账户权益已验证。OpenAI 列表只包含账号接口标为可显示、且未标为禁止 API 使用的模型；它不是剩余额度或每次推理成功的保证。Kimi 和 Grok 的本地目录也不代表账号权限已验证。本项目不承诺官方背书，不提供虚构的余额或配额数据。Kimi Datasource 与 Grok X Search 已完成独立工具适配，是否开放由插件配置决定；这不代表所有数据库、搜索或账号权益已验证。其他游戏、通用网页搜索等产品工具不在范围内。
+代码接入不代表账户权益已验证。OpenAI 列表只包含账号接口标为可显示、且未标为禁止 API 使用的模型；它不是剩余额度或每次推理成功的保证。Kimi / Grok 的目录成功也不代表逐模型权限已验证；Grok 的 `scope: vendor` 明确表示厂商目录，而不是订阅权益列表。本项目不承诺官方背书，不提供虚构的余额或配额数据。Kimi Datasource 与 Grok X Search 已完成独立工具适配，是否开放由插件配置决定；这不代表所有数据库、搜索或账号权益已验证。其他游戏、通用网页搜索等产品工具不在范围内。
 
 Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses 传输，不另写 OAuth 或安装 CLI。xAI 已公开支持 [OpenCode](https://x.ai/news/grok-opencode) 及 [Grok Build/ACP](https://docs.x.ai/build/cli/headless-scripting)，但这不等于 DSH 客户端的授权适用范围已获确认。**不回退 API key 只能限制客户端认证方式，不能保证服务端不使用预付 credits 或产生额外收费。** 使用前应核对账号计费限制；面板测试会再次提示，真实授权及计费仍需用户另行验证。
 
@@ -19,7 +19,7 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 1. 在 DSH 安装本目录作为本地 bundle（由 `plugin_manager install_bundle` 完成，勿直接改 profile）。
 2. 打开 **设置 → dk-subscriptions → 模型接入**，选择 OpenAI、Kimi 或 Grok 登录。**数据工具**是独立子页，两类内容不会同时显示。Grok 需要当前官方 SDK 提供 xAI OAuth；旧 SDK 不支持时保持不可用。
 3. 点击连接会先打开等待页，取得官方授权链接后跳转。若弹窗受限，可直接点击面板里的 **打开官方授权页面**，或 **复制授权链接** 到浏览器，再使用显示的授权码。由用户确认账户和授权；插件及代理工具不代填账号密码、不代点授权同意。
-4. OpenAI 授权后自动加载账号模型；也可点击 **刷新账号模型 · 不消耗推理额度**，只查询元数据。Kimi / Grok 显示本地 SDK 目录，不探测账号权益。另行点击模型测试并确认后才会发送很短的编码问题，**消耗额度；Grok 还可能额外收费**。
+4. 三个厂商均在已登录启动、授权完成及读取模型列表时自动同步；60 秒内复用缓存，后续访问自动重查。也可点击 **刷新模型目录 · 不发送推理请求** 强制更新。新模型无需手工添加或等待 SDK 名单更新。另行点击模型测试并确认后才会发送很短的编码问题，**消耗额度；Grok 还可能额外收费**。
 5. 主会话的模型选择器使用上表的独立路由。已有其他插件的路由保持不变。
 
 兼容性仅声明 **DSH 0.2.1-rc.5 和 0.2.2-rc.1**，官方 `@deepseek-ai/dsh-llm-pi-ai` 使用相同版本范围。0.1.8 修复旧版精确锁定导致 0.2.2-rc.1 安装或启动时被兼容性检查拒绝的问题；已在该桌面版本的 Node 24.21.0 下通过真实适配器的离线回归，不需要版本豁免。虽然 `PiAiAdapter` 是包导出，其构造 profile 的结构仍可能变化；其他版本需重新验证，不使用宽泛范围绕过版本限制。更新本地 bundle 后需完全退出并重启 DSH；若安装的是打包副本而非本目录链接，先通过插件管理器重新安装新版。
@@ -66,15 +66,16 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 
 本地更新后需完全退出并重启 DSH；仅刷新网页不会加载新的后台逻辑，旧进程中已泄漏的存储域也需要重启释放。已完成离线请求捕获与事件测试，不代表厂商真实账号权益已验证。
 
-## 账号模型列表
+## 通用模型自动同步
 
-- 发现流程是通用的：[models.js](<models.js>) 统一校验模型描述、缓存、并发、超时、取消、账号隔离和失败状态；[model-sources.js](<model-sources.js>) 的注册表只保留厂商查询与字段映射。一个 source 提供 `readIdentity(signal)` 和 `loadModels({ identity, signal })`，返回规范化的原生模型描述，接入后设置页、主路由、测试与退出流程无需再按厂商分支。
-- 当前只有 OpenAI 注册了已核实的账号模型 source。Kimi / Grok 的账号查询尚未接入，仍明确显示本地 SDK 目录；对未注册厂商执行账号刷新会返回 `MODEL_CATALOG_UNAVAILABLE`，不会猜测通用 `/models` 地址或冒充真实账号列表。通用流程中的第二个 source 仅为测试合成数据，不代表已验证 Kimi 或 Grok 的真实账号模型接口。
-- OpenAI 查询 `https://chatgpt.com/backend-api/codex/models`，使用官方服务刷新后的共享 OAuth 凭证及账号标识；客户端版本取自已安装的 pi-ai。不会安装 CLI、复制登录流程或通过逐个推理探测模型权限。
-- 设置页、主会话的 `subscription-openai-codex` 路由和测试校验共用同一列表。允许账号接口返回 SDK 未收录的新模型 ID，不与静态名称合并。SDK 只提供必要的传输描述模板，不提供列表名称。
-- 元数据只在内存中缓存 60 秒；显式刷新跳过缓存。并发调用共享最长 10 秒的查询，单个调用方取消不会使其他调用失败。退出或账号变化会清空列表。已准备的主会话调用保留原模型描述，避免刷新后上下文/推理参数与之前校验的元数据不一致。
-- 查询被拒绝、限流或返回不支持的数据时，显示脱敏错误并清空可选列表，**不回退静态名称**。没有列表时禁用模型测试；刷新本身不发送推理请求。
-- 更新代码后需要完全退出并重启 DSH，再重新打开设置页；仍有效的 OAuth 凭证可继续使用，不必为更新模型列表而重新登录。前端不接受旧后台的静态 OpenAI 列表。
+- [models.js](<models.js>) 统一处理描述校验、60 秒内存缓存、并发合并、超时、取消、账号隔离及失败状态。[model-sources.js](<model-sources.js>) 仅处理厂商端点、字段映射和目录范围；三个厂商使用同一生命周期。
+- **OpenAI**：`GET https://chatgpt.com/backend-api/codex/models`，使用共享 OAuth、账号标识与已安装 SDK 版本，过滤不可显示/不支持 API 的模型。
+- **Kimi**：`GET https://api.kimi.com/coding/v1/models`，遵循[官方 CLI 的模型发现接口](https://github.com/MoonshotAI/kimi-cli/blob/main/src/kimi_cli/auth/platforms.py)。名称、上下文、图像和思考档位读取远端声明，包括 K3.1 Pro 及高速版；只支持思考时不提供 off，默认档位同步到选择器和调用。视频目前不声明为 Harness 输入能力。参见[模型说明](https://www.kimi.com/code/docs/kimi-code/models.html)。
+- **Grok**：用现有共享 OAuth 读取 `https://api.x.ai/v1/models`，与 `/v1/language-models` 按精确 ID 合并，排除生成图片/视频和不支持客户端 function tools 的 multi-agent。参考[模型接口](https://docs.x.ai/developers/rest-api-reference/inference/models.md)及[multi-agent 限制](https://docs.x.ai/developers/model-capabilities/text/multi-agent.md)。当前账号的两次 GET 已返回 200，但这只是远端 API 目录，`scope: vendor` **不代表逐模型订阅权限或仅扣订阅费用已验证**；不冒充 Grok Build 客户端，不切换到 CLI proxy 推理路由。
+- 设置页、各主会话独立路由、模型解析、prepared call 和测试共用远端名单。SDK 只提供传输契约及精确同 ID 的缺失元数据，不混入静态名称或自行扩展别名。未知模型缺少输出上限时采用本地 16,384 token 生成上限（不是服务端能力声明）；缺少上下文时保守采用 32,768。
+- 启动和授权成功后自动同步，列表/状态/调用在缓存过期后重查，显式刷新跳过缓存；没有后台轮询计时器。OAuth 解析与远端请求各有 10 秒期限，单个调用方取消不伤共享请求；退出、凭证变化或卸载使旧结果失效。prepared call 保留已校验的元数据。
+- 三厂统一复用官方加锁 OAuth 刷新，不回退 API key；固定可信端点、禁重定向、响应上限 1 MiB / 1,000 模型，忽略远端任意 URL/头/凭证字段。失败清空选择列表并显示脱敏错误，**不回退静态名单**。未注册同步源明确不可用。
+- 更新后需重新加载插件后台并刷新当前页面；若后台仍是旧版本，界面拒绝所有厂商的旧静态目录。仍有效的 OAuth 不必重新登录。真实验证只发送目录元数据，不执行会消耗推理额度的模型测试。
 
 ## 连接时没有授权页面
 
@@ -95,7 +96,7 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 - **生效时间**：完全退出并重启 DSH 后加载；之后修改系统代理地址或端口，也需要重启以重新读取。再发起一次新授权，不重复提交已失败的授权码。
 - 若需要手动覆盖，DSH 0.2.1-rc.5 从用户级 `~/.dsh/.env`（或自定义 `DSH_HOME`）读取代理。**不要写进项目 `.env`**。这类显式环境设置影响整个 DSH，继承自启动进程的同名变量优先；与本插件的局部自动模式不同。
 - 若提示 **国家或地区被拒绝（HTTP 403）**，检查实际后台网络是否在 OpenAI 支持的地区。这不是模型额度不足的提示。若提示回调不匹配、账号 ID 解析失败或凭证未保存，应检查回调、官方适配器版本或凭证服务；修改代理不能修复所有授权错误。面板仅显示脱敏类别，不输出原始令牌响应。
-- `subscription_accounts` 的 `status` 还返回模型列表来源/查询状态、代理模式、未启用原因、经过自动 dispatcher 的请求数和最近 HTTP 状态码。状态查询可能加载账号模型元数据，并通过官方机制刷新到期凭证，但不发送推理请求。不会记录 URL、请求头、授权码或令牌。自动代理复用 Undici 自带的兼容包装器，兼容桌面 Node 24 的原生 `fetch`。
+- `subscription_accounts` 的 `status` 还返回模型列表来源/查询状态、代理模式、未启用原因、经过自动 dispatcher 的请求数和最近 HTTP 状态码。状态查询可能同步三个厂商的远端模型元数据，并通过官方机制刷新到期凭证，但不发送推理请求。不会记录 URL、请求头、授权码或令牌。自动代理复用 Undici 自带的兼容包装器，兼容桌面 Node 24 的原生 `fetch`。
 
 ## 安全边界
 

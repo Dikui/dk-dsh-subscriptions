@@ -98,12 +98,15 @@ test('client validates malformed endpoint data', () => {
   }
 });
 
-test('OpenAI status rejects a local baseline or stale names after discovery failure', () => {
+// small/spec — automatic remote catalogs task; all vendors must reject legacy local lists.
+test('every vendor rejects a local baseline or stale names after discovery failure', () => {
   const { helpers: h } = loadClient();
-  const state = initialStatus(), account = state.providers[0];
-  account.modelCatalog.source = 'local';
-  assert.equal(h.validStatus(state), false);
-  account.modelCatalog.source = 'account'; account.modelCatalog.state = 'error';
-  account.models = [{ id: 'static-spark', name: 'Static Spark' }];
-  assert.equal(h.validStatus(state), false);
+  for (let index = 0; index < 3; index++) {
+    const state = initialStatus(), account = state.providers[index];
+    account.modelCatalog.source = 'local';
+    assert.equal(h.validStatus(state), false, account.id);
+    account.modelCatalog.source = 'account'; account.modelCatalog.state = 'error';
+    account.models = [{ id: 'static-spark', name: 'Static Spark' }];
+    assert.equal(h.validStatus(state), false, account.id);
+  }
 });

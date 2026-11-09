@@ -35,36 +35,137 @@ function codexModels(value, baseline) {
   return [...selected.values()].sort((a, b) => a.priority - b.priority).map(item => item.model);
 }
 
-function openAICodexModels({ baseModels, clientVersion, readCredential, getAuth, fetchCatalog }) {
-  return {
-    async readIdentity(signal) {
-      const credential = await readCredential(signal);
-      return credential?.type === 'oauth' && credential.access && typeof credential.accountId === 'string' ? credential.accountId : undefined;
-    },
-    async loadModels({ identity, signal }) {
-      let credential;
-      for (let attempt = 0; attempt < 2; attempt++) {
-        const resolved = await getAuth(signal); // Official refresh also persists rotated tokens.
-        if (resolved?.source !== 'OAuth') fail('MODEL_CATALOG_DENIED');
-        credential = await readCredential(signal);
-        if (credential?.type === 'oauth' && credential.accountId === identity && credential.access === resolved.auth?.apiKey) break;
-        credential = undefined;
-      }
-      if (!credential) fail('MODEL_CATALOG_CHANGED');
-      const response = await fetchCatalog(`https://chatgpt.com/backend-api/codex/models?client_version=${encodeURIComponent(clientVersion)}`, {
-        method: 'GET', redirect: 'error', signal,
-        headers: { authorization: `Bearer ${credential.access}`, 'chatgpt-account-id': credential.accountId,
-          accept: 'application/json', originator: 'pi' },
-      });
-      if (!response.ok) fail([401, 403].includes(response.status) ? 'MODEL_CATALOG_DENIED' : response.status === 429 ? 'MODEL_CATALOG_RATE_LIMIT' : 'MODEL_CATALOG_FAILED');
-      let payload;
-      try { payload = await response.json(); } catch { fail('MODEL_CATALOG_INVALID'); }
-      // Account-scoped consent fingerprint, never a raw identifier or token.
-      const speedAccount = createHash('sha256').update(`dk-subscriptions:speed:${identity}`).digest('hex');
-      return codexModels(payload, baseModels).map(model => ({ ...model, speedAccount }));
-    },
-  };
+const emptyCost = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+const effortMap = efforts => Object.fromEntries(levels.map(level => [level,
+  efforts.includes(level === 'off' ? 'none' : level) ? (level === 'off' ? 'none' : level) : null]));
+function dataRows(value) {
+  if (!Array.isArray(value?.data) || value.data.length > 1000) fail('MODEL_CATALOG_INVALID');
+  return value.data;
+}
+function template(baseModels, id) {
+  const known = baseModels.find(model => model.id === id);
+  const base = known ?? baseModels[0];
+  if (!base) fail('MODEL_CATALOG_INVALID');
+  // Unknown IDs inherit transport only, never a known model's vision, effort or cost claims.
+  return { type: 'chat', api: base.api, baseUrl: base.baseUrl, provider: base.provider,
+    // Missing output limits use a local generation policy, not another model's claimed capability.
+    maxTokens: known?.maxTokens ?? 16384, contextWindow: known?.contextWindow ?? 32768,
+    ...(base.compat ? { compat: { ...base.compat } } : {}),
+    ...(base.inputLimits ? { inputLimits: structuredClone(base.inputLimits) } : {}), cost: known?.cost ?? emptyCost() };
+}
+function kimiModels(value, baseline) {
+  if (value?.has_more === true) fail('MODEL_CATALOG_INVALID'); // Never publish an incomplete page as the full catalog.
+  return dataRows(value).map(row => {
+    const base = template(baseline, row?.id);
+    const effort = row?.reasoning?.effort;
+    const declared = row?.think_efforts?.support === true ? row.think_efforts.valid_efforts : effort?.valid;
+    const onlyThinking = row?.reasoning?.type === 'only' || row?.supports_thinking_type === 'only';
+    const efforts = Array.isArray(declared) ? declared.filter(item => (levels.includes(item) || item === 'none')
+      && (!onlyThinking || !['none', 'off'].includes(item))) : [];
+    const defaultEffort = row?.think_efforts?.default_effort ?? effort?.default;
+    return { ...base, id: row?.id, name: row?.display_name ?? row?.id,
+      contextWindow: positive(row?.context_length) ? row.context_length : positive(row?.limit?.context) ? row.limit.context : base.contextWindow,
+      input: row?.supports_image_in === true || row?.modalities?.input?.includes('image') ? ['text', 'image'] : ['text'],
+      reasoning: row?.supports_reasoning === true || onlyThinking, thinkingLevelMap: effortMap(efforts),
+      ...(efforts.includes(defaultEffort) ? { defaultReasoningEffort: defaultEffort } : {}),
+    };
+  });
+}
+async function grokModels(value, baseline, { query }) {
+  const rows = dataRows(value);
+  const language = await query('https://api.x.ai/v1/language-models');
+  if (!Array.isArray(language?.models) || language.models.length > 1000) fail('MODEL_CATALOG_INVALID');
+  const textModels = new Map(language.models.filter(row => Array.isArray(row?.input_modalities)
+    && row.input_modalities.includes('text') && Array.isArray(row.output_modalities)
+    && row.output_modalities.length === 1 && row.output_modalities[0] === 'text').map(row => [row.id, row]));
+  return rows.flatMap(row => {
+    const text = textModels.get(row?.id);
+    // xAI documents that multi-agent models cannot accept custom function tools.
+    if (!text || /multi-agent/i.test(row?.id) || text.capabilities?.function_calling === false) return [];
+    const base = template(baseline, row?.id);
+    const known = baseline.find(model => model.id === row?.id);
+    const capabilities = row?.capabilities ?? text.capabilities;
+    const efforts = Array.isArray(capabilities?.reasoning_effort) ? capabilities.reasoning_effort : undefined;
+    return [{ ...base, id: row?.id, name: row?.id,
+      contextWindow: positive(row?.context_length) ? row.context_length : base.contextWindow,
+      input: text.input_modalities?.includes('image') ? ['text', 'image'] : ['text'],
+      reasoning: efforts ? efforts.some(effort => effort !== 'none') : known?.reasoning === true,
+      thinkingLevelMap: efforts ? effortMap(efforts) : known?.thinkingLevelMap ?? effortMap([]),
+      ...(efforts?.includes(capabilities.default_reasoning_effort) ? { defaultReasoningEffort: capabilities.default_reasoning_effort } : {}),
+    }];
+  });
+}
+function fingerprint(credential) {
+  if (credential?.type !== 'oauth' || typeof credential.access !== 'string' || !credential.access) return undefined;
+  return createHash('sha256').update(JSON.stringify(['dk-subscriptions:catalog',
+    credential.accountId, credential.subject, credential.refresh, credential.access])).digest('hex');
 }
 
-// Only verified account-discovery sources belong here; SDK-local lists are not substitutes.
-export const accountModelSources = new Map([['openai-codex', openAICodexModels]]);
+// Bound both declared and streamed bytes before parsing untrusted metadata.
+async function catalogJson(response) {
+  const limit = 1024 * 1024;
+  const length = Number(response.headers.get('content-length'));
+  if (Number.isFinite(length) && length > limit) { await response.body?.cancel(); fail('MODEL_CATALOG_INVALID'); }
+  if (!response.body) fail('MODEL_CATALOG_INVALID');
+  const reader = response.body.getReader(), chunks = [];
+  let size = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > limit) { await reader.cancel(); fail('MODEL_CATALOG_INVALID'); }
+      chunks.push(value);
+    }
+    try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { fail('MODEL_CATALOG_INVALID'); }
+  } finally { reader.releaseLock(); }
+}
+
+// One auth/HTTP boundary for all vendors. Refresh via the official resolver before
+// capturing identity: a first refresh must not invalidate its own discovery.
+function remoteSource({ endpoint, normalize, scope = 'account', headers = () => ({}) }) {
+  return ({ baseModels, clientVersion, readCredential, getAuth, fetchCatalog }) => ({
+    scope,
+    async readIdentity(signal) {
+      if (!fingerprint(await readCredential(signal))) return undefined;
+      const resolved = await getAuth(signal); // Official resolver safely persists rotation.
+      if (resolved?.source !== 'OAuth') fail('MODEL_CATALOG_DENIED');
+      const credential = await readCredential(signal);
+      if (!fingerprint(credential)) return undefined;
+      const bearer = resolved.auth?.apiKey ?? new Headers(resolved.auth?.headers).get('authorization')?.replace(/^Bearer\s+/i, '');
+      if (credential.access !== bearer) fail('MODEL_CATALOG_CHANGED');
+      return fingerprint(credential);
+    },
+    async loadModels({ identity, signal }) {
+      const credential = await readCredential(signal);
+      if (fingerprint(credential) !== identity) fail('MODEL_CATALOG_CHANGED');
+      async function query(url) {
+        const response = await fetchCatalog(url, { method: 'GET', redirect: 'error', signal,
+          headers: { authorization: `Bearer ${credential.access}`, accept: 'application/json', ...headers(credential) } });
+        if (!response.ok) {
+          await response.body?.cancel();
+          fail([401, 403].includes(response.status) ? 'MODEL_CATALOG_DENIED'
+            : response.status === 429 ? 'MODEL_CATALOG_RATE_LIMIT' : 'MODEL_CATALOG_FAILED');
+        }
+        return catalogJson(response);
+      }
+      return normalize(await query(endpoint(clientVersion)), baseModels, { credential, query });
+    },
+  });
+}
+const openAICodexModels = remoteSource({
+  endpoint: version => `https://chatgpt.com/backend-api/codex/models?client_version=${encodeURIComponent(version)}`,
+  headers: credential => {
+    if (typeof credential.accountId !== 'string' || !credential.accountId) fail('MODEL_CATALOG_DENIED');
+    return { 'chatgpt-account-id': credential.accountId, originator: 'pi' };
+  },
+  normalize: (payload, baseline, { credential }) => {
+    const speedAccount = createHash('sha256').update(`dk-subscriptions:speed:${credential.accountId}`).digest('hex');
+    return codexModels(payload, baseline).map(model => ({ ...model, speedAccount }));
+  },
+});
+const kimiCodingModels = remoteSource({ endpoint: () => 'https://api.kimi.com/coding/v1/models', normalize: kimiModels });
+
+// Verified remote catalogs only; SDK lists supply transport templates, never names.
+const xaiModels = remoteSource({ endpoint: () => 'https://api.x.ai/v1/models', normalize: grokModels, scope: 'vendor' });
+export const accountModelSources = new Map([['openai-codex', openAICodexModels], ['kimi-coding', kimiCodingModels], ['xai', xaiModels]]);

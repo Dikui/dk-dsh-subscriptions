@@ -121,8 +121,12 @@ test('session Speed survives native streamSimple conversion into the actual Code
     // xAI's documented priority scheduling shares the same per-session UI and
     // payload path, but never claims subscription entitlement or Build Fast.
     const grokProvider = 'subscription-xai';
-    const grokModel = (await adapter.resolveModel(grokProvider, 'grok-4.7')).id;
     records.set(native.recordKeyFor('xai'), { kind: 'grant', payload: { type: 'oauth', access: 'SYNTHETIC-GROK', expires: Date.now() + 3600000 } });
+    mock.get('https://api.x.ai').intercept({ method: 'GET', path: '/v1/models' }).reply(200, { data: [{ id: 'grok-4.7', context_length: 500000 }] });
+    mock.get('https://api.x.ai').intercept({ method: 'GET', path: '/v1/language-models' }).reply(200, {
+      models: [{ id: 'grok-4.7', input_modalities: ['text', 'image'], output_modalities: ['text'] }],
+    });
+    const grokModel = (await adapter.resolveModel(grokProvider, 'grok-4.7')).id;
     selected.set('session-b', { provider: grokProvider, model: grokModel });
     const grokState = await request('speed-state', 'session-b');
     const requestState = await grokState.json();
@@ -146,6 +150,10 @@ test('session Speed survives native streamSimple conversion into the actual Code
     const kimiProvider = 'subscription-kimi-coding';
     const kimiModel = 'kimi-for-coding';
     records.set(native.recordKeyFor('kimi-coding'), { kind: 'grant', payload: { type: 'oauth', access: 'SYNTHETIC-KIMI', expires: Date.now() + 3600000 } });
+    mock.get('https://api.kimi.com').intercept({ method: 'GET', path: '/coding/v1/models' }).reply(200, { data: [{
+      id: kimiModel, context_length: 1048576, supports_reasoning: true,
+      reasoning: { type: 'only', effort: { valid: ['low', 'high', 'max'], default: 'max' } },
+    }] });
     selected.set('session-b', { provider: kimiProvider, model: kimiModel });
     const defaultState = await request('speed-state', 'session-b');
     const kimiState = await defaultState.json();

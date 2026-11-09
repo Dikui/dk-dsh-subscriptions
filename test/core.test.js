@@ -19,7 +19,11 @@ function fixture(begin) {
   const authorization = { describe: () => ({ methods: [{ id: 'oauth' }], inFlight: false }),
     begin: begin ?? (async () => ({ status: 'authorized' })) };
   const llm = { async *stream(args) { calls.push(args); yield { type: 'text-delta', text: '2' }; yield { type: 'finish', reason: { kind: 'stop' } }; } };
-  const api = createSubscriptions({ authorization, credentials, llm, catalog, keyFor });
+  // The service receives already-registered catalogs; this fake replaces remote HTTP.
+  const accountModels = new Map(catalog.map(provider => [provider.id, {
+    async ensure() {}, clear() {}, status: () => ({ source: 'account', state: 'ready', error: null, updatedAt: 1 }),
+  }]));
+  const api = createSubscriptions({ authorization, credentials, llm, catalog, keyFor, accountModels });
   return { api, records, credentials, authorization, calls };
 }
 const turn = () => new Promise(resolve => setImmediate(resolve));
@@ -67,7 +71,7 @@ test('account metadata refresh is available without sending an inference request
   api.dispose();
 });
 
-// small/spec — both registered sources use synthetic metadata and no inference transport.
+// small/spec — registered sources use synthetic metadata and no inference transport.
 test('registered vendors share model refresh and clear only their own discovery state', async () => {
   const f = fixture();
   const accountModels = new Map();
@@ -99,7 +103,25 @@ test('registered vendors share model refresh and clear only their own discovery 
     assert.deepEqual(accountModels.get('kimi-coding').getModels(), []);
     assert.equal(accountModels.get('openai-codex').getModels()[0].id, 'openai-codex-1');
   } finally { api.dispose(); }
-  await assert.rejects(f.api.refreshModels('kimi-coding'), { code: 'MODEL_CATALOG_UNAVAILABLE' });
+  const unavailable = createSubscriptions({ authorization: f.authorization, credentials: f.credentials, llm: {}, catalog, keyFor });
+  await assert.rejects(unavailable.refreshModels('kimi-coding'), { code: 'MODEL_CATALOG_UNAVAILABLE' });
+  unavailable.dispose();
+});
+
+// small/spec — metadata loads automatically on authorization, without a settings/list request.
+test('successful login synchronizes models before any status or model-list request', async () => {
+  const records = new Map();
+  const synchronized = Promise.withResolvers();
+  const api = createSubscriptions({
+    authorization: { describe: () => ({ methods: [{ id: 'oauth' }] }), begin: async ({ key }) => {
+      records.set(key, grant()); return { status: 'authorized' };
+    } },
+    credentials: { readRecord: async key => records.get(key) }, llm: {}, catalog, keyFor,
+    accountModels: new Map([['kimi-coding', { clear() {}, async ensure() { synchronized.resolve(); } }]]),
+  });
+  api.login('kimi-coding');
+  await Promise.race([synchronized.promise, new Promise((_, reject) => setImmediate(() => reject(new Error('login did not synchronize metadata'))))]);
+  api.dispose();
 });
 
 test('OAuth validation rejects API keys and malformed grants', () => {
@@ -142,21 +164,25 @@ test('refresh writes canonical grants and never resurrects logout on any route',
     assert.deepEqual(f.records.get(key), { kind: 'grant', payload: { type: 'subscription-revoked' } });
   }
 });
-// small/spec — feature/grok-subscription; the fake SDK catalog is not account discovery.
-test('status labels Grok models SDK-local without exposing OAuth secrets', async () => {
+// small/spec — remote catalog task; a missing discovery source must never advertise SDK names.
+test('status marks a vendor without a remote source unavailable without exposing OAuth secrets', async () => {
   const f = fixture();
   f.records.set(keyFor('openai-codex'), grant());
   f.records.set(keyFor('xai'), grant());
-  const state = await f.api.status();
+  const api = createSubscriptions({ authorization: f.authorization, credentials: f.credentials, llm: {}, catalog, keyFor,
+    accountModels: new Map([['xai', null]]) });
+  const state = await api.status();
   assert.equal(state.providers[0].configured, true);
   assert.equal(state.providers[1].configured, false);
   const grok = state.providers.find(provider => provider.id === 'xai');
   assert.equal(grok.available, true);
   assert.equal(grok.configured, true);
   assert.equal(grok.route, 'subscription-xai');
-  assert.equal(grok.modelCatalog.source, 'local');
-  assert.deepEqual(grok.models, [{ id: 'model-1', name: 'Model One' }]);
-  await assert.rejects(f.api.refreshModels('xai'), { code: 'MODEL_CATALOG_UNAVAILABLE' });
+  assert.deepEqual(grok.modelCatalog, { source: 'none', state: 'unavailable', error: 'MODEL_CATALOG_UNAVAILABLE', updatedAt: null });
+  assert.deepEqual(grok.models, []);
+  await assert.rejects(api.refreshModels('xai'), { code: 'MODEL_CATALOG_UNAVAILABLE' });
+  await assert.rejects(api.test('xai', 'model-1'), { code: 'MODEL_CATALOG_UNAVAILABLE' });
+  api.dispose();
   assert.equal(f.calls.length, 0);
   assert.doesNotMatch(JSON.stringify(state), /DO-NOT-EXPOSE|REFRESH-SECRET/);
   assert.throws(() => f.api.login('__proto__'), { code: 'UNKNOWN_PROVIDER' });
@@ -250,7 +276,7 @@ test('official OAuth failures retain actionable categories without exposing toke
   assert.equal(safeError(Object.assign(new Error('SECRET'), { code: 'SECRET' })).error, 'REQUEST_FAILED');
 });
 // small/spec — feature/grok-subscription; all inference is a deterministic in-memory fake.
-test('test requires OAuth and exact SDK model before dispatching each isolated route', async () => {
+test('test requires OAuth and exact synchronized model before dispatching each isolated route', async () => {
   const f = fixture();
   for (const { id } of catalog) {
     await assert.rejects(f.api.test(id, 'model-1'), { code: 'MISSING_CREDENTIAL' });

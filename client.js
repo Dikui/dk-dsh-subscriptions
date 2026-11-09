@@ -21,15 +21,15 @@ window.__ModuleLoader__.load({
         grokToolsCost: 'Grok inference and X Search may incur extra charges. OAuth does not guarantee subscription-only billing.',
         xai: 'Uses the official SDK’s Grok OAuth flow; DSH authorization scope is not independently confirmed. Check billing limits before use: subscription-only billing is not guaranteed and extra charges may apply.',
         grokNews: 'Grok and OpenCode', grokDocs: 'Official headless scripting docs',
-        model: 'Local model catalog', noModels: 'No local models available',
-        accountModels: 'Account model list', accountNoModels: 'No selectable account models loaded',
-        refreshModels: 'Refresh account models · no inference quota', refreshingModels: 'Refreshing account models…',
-        catalogError: 'Could not fetch the account model list. Check the backend network, then refresh. No static model names were substituted.',
-        catalogDenied: 'The account model endpoint rejected this credential or connection (HTTP 401/403). Check authorization and the backend network, then refresh.',
-        catalogInvalid: 'The account model endpoint returned an unsupported response. No static model names were substituted.',
-        catalogRateLimit: 'Account model discovery was rate limited. Wait before refreshing; no inference request was sent.',
-        catalogChanged: 'The credential changed during discovery. Refresh the account model list.',
-        catalogUnavailable: 'This provider has no registered account model source. A local SDK catalog is not proof of account availability.',
+        catalogVendor: 'Provider catalog · model access and subscription billing are not verified',
+        accountModels: 'Remote model catalog', accountNoModels: 'No selectable remote models loaded',
+        refreshModels: 'Refresh model catalog · no inference request', refreshingModels: 'Refreshing model catalog…',
+        catalogError: 'Could not fetch the remote model catalog. Check the backend network, then refresh. No static model names were substituted.',
+        catalogDenied: 'The model catalog endpoint rejected this credential or connection (HTTP 401/403). Check authorization and the backend network, then refresh.',
+        catalogInvalid: 'The model catalog endpoint returned an unsupported response. No static model names were substituted.',
+        catalogRateLimit: 'Model catalog discovery was rate limited. Wait before refreshing; no inference request was sent.',
+        catalogChanged: 'The credential changed during discovery. Refresh the remote model catalog.',
+        catalogUnavailable: 'This provider has no registered remote model source. A local SDK catalog is not proof of account availability.',
         test: 'Test selected model · uses quota', testing: 'Testing…', testResult: 'Test response',
         testConfirm: 'Send one real request with the selected model? This consumes subscription quota.',
         logoutConfirm: 'Clear the shared OAuth secrets, leaving a secret-free signed-out marker? Other DSH features using this same credential will also lose access.',
@@ -73,15 +73,15 @@ window.__ModuleLoader__.load({
         grokToolsCost: 'Grok 推理和 X Search 可能产生额外收费。OAuth 授权不保证仅消耗订阅额度。',
         xai: '复用官方 SDK 的 Grok OAuth 流程，DSH 客户端的授权适用范围尚未独立确认。使用前请核对账号计费限制：无法保证仅消耗订阅额度，可能产生额外收费。',
         grokNews: 'Grok 与 OpenCode', grokDocs: '官方无头脚本文档',
-        model: '本地模型目录', noModels: '暂无本地模型',
-        accountModels: '账号模型列表', accountNoModels: '尚未加载可选择的账号模型',
-        refreshModels: '刷新账号模型 · 不消耗推理额度', refreshingModels: '正在刷新账号模型…',
-        catalogError: '未能获取账号模型列表。请检查后台网络后刷新；没有使用静态模型名称代替。',
-        catalogDenied: '账号模型接口拒绝了此凭证或连接（HTTP 401/403）。请检查授权和后台网络后刷新。',
-        catalogInvalid: '账号模型接口返回了无法支持的数据，没有使用静态模型名称代替。',
-        catalogRateLimit: '账号模型查询被限流，请稍后刷新；未发送推理请求。',
-        catalogChanged: '查询期间凭证发生变化，请刷新账号模型列表。',
-        catalogUnavailable: '此厂商尚未接入账号模型查询；本地 SDK 目录不代表账号可用模型。',
+        catalogVendor: '厂商远端目录 · 未验证逐模型权限或订阅扣费',
+        accountModels: '远端模型目录', accountNoModels: '尚未加载可选择的远端模型',
+        refreshModels: '刷新模型目录 · 不发送推理请求', refreshingModels: '正在刷新模型目录…',
+        catalogError: '未能获取远端模型目录。请检查后台网络后刷新；没有使用静态模型名称代替。',
+        catalogDenied: '模型目录接口拒绝了此凭证或连接（HTTP 401/403）。请检查授权和后台网络后刷新。',
+        catalogInvalid: '模型目录接口返回了无法支持的数据，没有使用静态模型名称代替。',
+        catalogRateLimit: '远端模型查询被限流，请稍后刷新；未发送推理请求。',
+        catalogChanged: '查询期间凭证发生变化，请刷新远端模型目录。',
+        catalogUnavailable: '此厂商尚未接入远端模型查询；本地 SDK 目录不代表账号可用模型。',
         test: '测试所选模型 · 消耗额度', testing: '正在测试…', testResult: '测试回复',
         testConfirm: '使用所选模型发送一次真实请求？这会消耗订阅额度。',
         logoutConfirm: '清除与官方提供商共用的 OAuth 密钥，仅保留不含密钥的退出标记？其他使用同一凭证的 DSH 功能也将失去访问权限。',
@@ -149,12 +149,12 @@ window.__ModuleLoader__.load({
           && (p.route === null || typeof p.route === 'string') && typeof p.available === 'boolean' && typeof p.configured === 'boolean'
           && [null, 'grant', 'api-key'].includes(p.credentialKind) && Array.isArray(p.models)
           && p.models.every(m => m && typeof m.id === 'string' && typeof m.name === 'string')
-          && p.modelCatalog && ['account', 'local', 'none'].includes(p.modelCatalog.source)
+          && p.modelCatalog && ['account', 'none'].includes(p.modelCatalog.source)
           && ['unloaded', 'loading', 'ready', 'error', 'unavailable'].includes(p.modelCatalog.state)
+          && (p.modelCatalog.scope === undefined || ['account', 'vendor'].includes(p.modelCatalog.scope))
           && (p.modelCatalog.error === null || typeof p.modelCatalog.error === 'string')
           && (p.modelCatalog.updatedAt === null || (Number.isFinite(p.modelCatalog.updatedAt) && p.modelCatalog.updatedAt >= 0))
-          && (p.id !== 'openai-codex' || p.modelCatalog.source === 'account')
-          && (p.modelCatalog.source !== 'account' || (p.configured && p.modelCatalog.state === 'ready') || !p.models.length)
+          && ((p.modelCatalog.source === 'account' && p.configured && p.modelCatalog.state === 'ready') || !p.models.length)
           && (p.attempt === null || validAttempt(p.attempt)));
     }
     async function request(body, signal, keepalive = false) {
@@ -530,9 +530,10 @@ window.__ModuleLoader__.load({
                     onClick: () => run(provider.id, 'models') }, t(busy[provider.id] === 'models' ? 'refreshingModels' : 'refreshModels')),
                   provider.modelCatalog.error && provider.modelCatalog.error !== result?.error
                     && h('p', { className: 'sl-error', role: 'alert' }, errorText(provider.modelCatalog.error)),
-                  h('div', { className: 'sl-model' }, h('label', null, t(accountCatalog ? 'accountModels' : 'model'),
+                  provider.modelCatalog.scope === 'vendor' && h('p', { className: 'sl-muted' }, t('catalogVendor')),
+                  h('div', { className: 'sl-model' }, h('label', null, t('accountModels'),
                     h('select', { value: model, disabled: disabled || isRunning || !provider.models.length, onChange: event => setModels(previous => ({ ...previous, [provider.id]: event.target.value })) },
-                      !provider.models.length && h('option', { value: '' }, t(accountCatalog ? 'accountNoModels' : 'noModels')), provider.models.map(item => h('option', { key: item.id, value: item.id }, item.name)))),
+                      !provider.models.length && h('option', { value: '' }, t('accountNoModels')), provider.models.map(item => h('option', { key: item.id, value: item.id }, item.name)))),
                   h('button', { type: 'button', disabled: disabled || isRunning || !provider.configured || !model, onClick: () => {
                     const warning = provider.id === 'xai' ? `\n${t('xai')}` : '';
                     if (window.confirm(`${t('testConfirm')}\n${model}${warning}`)) run(provider.id, 'test', { model });

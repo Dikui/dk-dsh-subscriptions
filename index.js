@@ -49,8 +49,13 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false }
   for (const profile of bindings.profiles().values()) authModels.setProvider(profile.piProvider);
   for (const provider of PROVIDERS) {
     const source = accountModelSources.get(provider.id);
-    if (!source || !bindings.profiles().has(provider.route)) continue;
+    if (!bindings.profiles().has(provider.route)) continue;
     const native = catalog.find(item => item.id === provider.id);
+    if (!source) {
+      accountModels.set(provider.id, null);
+      native.getModels = native.getAllModels = () => [];
+      continue;
+    }
     const models = createAccountModels({ ...source({ baseModels: native.getModels(), clientVersion: piPackage.version,
       readCredential: signal => bindings.auth.credentials.read(provider.route, { signal }),
       getAuth: signal => network.run(() => authModels.getAuth(provider.route, { signal })),
@@ -63,7 +68,9 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false }
   }
   const modelsForRoute = route => accountModels.get(PROVIDERS.find(provider => provider.route === route)?.id);
   async function ensureAccountModels(provider, signal) {
-    await modelsForRoute(provider)?.ensure({ signal: signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal });
+    const models = modelsForRoute(provider);
+    if (!models) fail('MODEL_CATALOG_UNAVAILABLE');
+    await models.ensure({ signal: signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal });
   }
   async function scopedSpeedModel(provider, descriptor) {
     const credential = await bindings.auth.credentials.read(provider);
@@ -73,6 +80,14 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false }
     return { ...descriptor, speedAccount };
   }
   class SubscriptionAdapter extends PiAiAdapter {
+    modelInfo(snapshot, provider, model) {
+      const info = super.modelInfo(snapshot, provider, model);
+      const defaultEffort = this.modelOf(snapshot, provider, model).defaultReasoningEffort;
+      if (info.reasoning && !info.reasoning.defaultEffort && info.reasoning.efforts.some(effort => effort.id === defaultEffort)) {
+        return { ...info, reasoning: { ...info.reasoning, defaultEffort } };
+      }
+      return info;
+    }
     async *streamWithSnapshot(options, snapshot) {
       const signal = options.signal ? AbortSignal.any([options.signal, lifetime.signal]) : lifetime.signal;
       await ensureAccountModels(options.provider, signal);
@@ -93,7 +108,8 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false }
         });
         snapshot = { ...snapshot, models: requestModels };
       }
-      yield* network.wrap(super.streamWithSnapshot({ ...options, signal }, snapshot));
+      const reasoningEffort = options.reasoningEffort ?? descriptor.defaultReasoningEffort;
+      yield* network.wrap(super.streamWithSnapshot({ ...options, ...(reasoningEffort ? { reasoningEffort } : {}), signal }, snapshot));
     }
     async listModels(provider) {
       if (!await bindings.auth.credentials.read(provider)) {
@@ -140,14 +156,17 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false }
     begin: request => network.run(() => ctx.authorization.begin(request)),
   }, credentials: ctx.credentials, llm: ctx.llm, catalog, keyFor: recordKeyFor, accountModels,
     vendorTools: { kimiDatasource: kimiDatasourceStatus, grokXSearch: grokXSearchStatus } });
+  // Startup warmup is a single lifetime-owned metadata operation, not a timer.
+  // Lists, status and calls perform subsequent TTL revalidation on demand.
+  await api.status(lifetime.signal);
   ctx.connection.fetch.register({ path: '/api/subscriptions-lite', methods: ['GET', 'POST'],
     requestBody: 'buffered', fetch: createHttpHandler(api) });
   ctx.tools.register({
     name: 'subscription_accounts',
-    description: 'Inspect subscription status and account model metadata, refresh a supported provider’s account model list, test a selected model, or clear local OAuth secrets. Status may refresh registered account model sources using official subscription credentials, but never sends inference. Never starts or completes login: the user authorizes in Settings → dk-subscriptions. Tests consume quota and Grok may incur server-side extra charges; no API-key fallback. Providers without a registered account source, including Grok, are explicitly labeled SDK-local; this is not verified account access or a subscription-only billing guarantee. Logout also signs out the shared official pi-ai route, without cancelling a plan or revoking the account remotely.',
+    description: 'Inspect subscription status and synchronized remote model catalogs for OpenAI, Kimi and Grok, force a metadata refresh, test a selected model, or clear local OAuth secrets. Status may query model metadata with shared official OAuth and refresh expired tokens, but never sends inference. Catalog scope distinguishes account metadata from the Grok vendor catalog; neither proves model access or subscription-only billing. No static catalog or API-key fallback. Never starts or completes login: the user authorizes in Settings → dk-subscriptions. Tests consume quota and Grok may incur extra charges. Logout signs out the shared official pi-ai route locally, without cancelling a plan or revoking the account remotely.',
     parameters: {
       type: 'object', properties: {
-        action: { type: 'string', enum: ['status', 'models', 'test', 'logout'], description: 'status may query account model metadata. models forces a registered provider’s metadata refresh; unsupported discovery is reported explicitly. Neither sends inference. test sends a small coding prompt. logout removes the shared local OAuth grant only.' },
+        action: { type: 'string', enum: ['status', 'models', 'test', 'logout'], description: 'status automatically synchronizes remote model metadata when stale. models forces a metadata refresh for the selected provider. Neither sends inference; catalog results are not entitlement verification. test sends a small coding prompt. logout removes the shared local OAuth grant only.' },
         provider: { type: 'string', enum: PROVIDERS.map(p => p.id), description: 'Required for models, test and logout.' },
         model: { type: 'string', description: 'Required for test: exact model id from status.' },
       }, required: ['action'], additionalProperties: false,

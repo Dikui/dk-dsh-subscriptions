@@ -147,7 +147,6 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     });
   }
   async function ensureModels(id, options) {
-    if (!accountModels.has(id)) return;
     const models = accountModels.get(id);
     if (!models) fail('MODEL_CATALOG_UNAVAILABLE');
     await models.ensure(options);
@@ -158,8 +157,8 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
         modelCatalog: { source: 'none', state: 'unavailable', error: null, updatedAt: null }, attempt: null };
       const record = await credentials.readRecord(keyFor(p.id));
       const flow = authorization.describe(keyFor(p.id));
-      let modelCatalog = { source: 'local', state: 'ready', error: null, updatedAt: null };
-      if (accountModels.has(p.id)) {
+      let modelCatalog = { source: 'none', state: 'unavailable', error: 'MODEL_CATALOG_UNAVAILABLE', updatedAt: null };
+      if (accountModels.get(p.id)) {
         const models = accountModels.get(p.id);
         if (!oauthRecord(record)) models?.clear();
         let error;
@@ -167,9 +166,9 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
           try { await ensureModels(p.id, { signal }); } catch (cause) { error = safeError(cause).error; }
         }
         modelCatalog = models?.status() ?? { source: 'account', state: 'unloaded', error: null, updatedAt: null };
-        if (error) modelCatalog = { source: 'account', state: 'error', error, updatedAt: null };
+        if (error) modelCatalog = { ...modelCatalog, source: 'account', state: 'error', error, updatedAt: null };
       }
-      const showModels = modelCatalog.source !== 'account' || (oauthRecord(record) && modelCatalog.state === 'ready' && attempts.get(p.id)?.state !== 'running');
+      const showModels = modelCatalog.source === 'account' && oauthRecord(record) && modelCatalog.state === 'ready' && attempts.get(p.id)?.state !== 'running';
       return { ...p, available: !!flow?.methods.some(method => method.id === 'oauth'),
         configured: !!oauthRecord(record), credentialKind: record?.kind ?? null,
         models: showModels ? catalog.find(item => item.id === p.id).getModels().map(({ id, name }) => ({ id, name })) : [],
@@ -202,9 +201,13 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
         notify(notice) { if (!attempt.controller.signal.aborted) attempt.notices = [...attempt.notices.slice(-7), safeNotice(notice)]; },
         prompt: input => prompt(attempt, input),
       },
-    })).then(outcome => {
+    })).then(async outcome => {
       attempt.state = outcome.status === 'authorized' ? 'authorized' : 'cancelled';
       accountModels.get(id)?.clear();
+      if (attempt.state === 'authorized' && !attempt.controller.signal.aborted) {
+        // Metadata failure does not turn a successfully saved grant into a failed login.
+        try { await ensureModels(id, { signal: attempt.controller.signal }); } catch { /* Catalog status is surfaced separately. */ }
+      }
     }).catch(error => {
       attempt.state = attempt.controller.signal.aborted ? 'cancelled' : 'failed';
       attempt.error = safeError(error).error;
