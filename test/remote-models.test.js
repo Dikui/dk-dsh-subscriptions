@@ -89,6 +89,18 @@ test('Grok discovers remote text models and their own capabilities without SDK o
   assert.deepEqual(f.requests.map(request => request.url), ['https://api.x.ai/v1/models', 'https://api.x.ai/v1/language-models']);
 });
 
+// small/regression — a wire-level none default is exposed and dispatched as Harness off.
+test('remote wire defaults use the same canonical effort IDs as selectable capabilities', async () => {
+  const f = fixture('xai', async url => url.endsWith('/language-models') ? Response.json({ models: [
+    { id: 'grok-default-off', input_modalities: ['text'], output_modalities: ['text'] },
+  ] }) : Response.json({ data: [{ id: 'grok-default-off', context_length: 100000,
+    capabilities: { reasoning_effort: ['none', 'low', 'high'], default_reasoning_effort: 'none' } }] }));
+  await f.catalog.ensure();
+  const model = f.catalog.getModels()[0];
+  assert.equal(model.defaultReasoningEffort, 'off');
+  assert.equal(model.thinkingLevelMap[model.defaultReasoningEffort], 'none');
+});
+
 // small/regression — untrusted metadata must not disable required thinking or advertise non-text chat.
 test('remote capability constraints override unsafe effort and modality declarations', async () => {
   const kimi = fixture('kimi-coding', async () => Response.json({ data: [{ id: 'new-thinking', context_length: 100000,

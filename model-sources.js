@@ -26,7 +26,7 @@ function codexModels(value, baseline) {
       input: input.length ? [...new Set(input)] : ['text'], reasoning: efforts.length > 0, thinkingLevelMap,
       speed: codexSpeed(row),
       supportsReasoningEffortUpdates: row.supports_reasoning_effort_updates === true,
-      defaultReasoningEffort: typeof row.default_reasoning_level === 'string' ? row.default_reasoning_level : undefined,
+      defaultReasoningEffort: efforts.includes(row.default_reasoning_level) ? canonicalEffort(row.default_reasoning_level) : undefined,
       contextWindow: positive(row.context_window) ? row.context_window : positive(row.max_context_window) ? row.max_context_window : base.contextWindow,
       ...(positive(row.max_context_window) ? { maxContextWindow: row.max_context_window } : {}),
       cost: known?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -38,6 +38,7 @@ function codexModels(value, baseline) {
 const emptyCost = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 const effortMap = efforts => Object.fromEntries(levels.map(level => [level,
   efforts.includes(level === 'off' ? 'none' : level) ? (level === 'off' ? 'none' : level) : null]));
+const canonicalEffort = effort => effort === 'none' ? 'off' : effort;
 function dataRows(value) {
   if (!Array.isArray(value?.data) || value.data.length > 1000) fail('MODEL_CATALOG_INVALID');
   return value.data;
@@ -67,7 +68,7 @@ function kimiModels(value, baseline) {
       contextWindow: positive(row?.context_length) ? row.context_length : positive(row?.limit?.context) ? row.limit.context : base.contextWindow,
       input: row?.supports_image_in === true || row?.modalities?.input?.includes('image') ? ['text', 'image'] : ['text'],
       reasoning: row?.supports_reasoning === true || onlyThinking, thinkingLevelMap: effortMap(efforts),
-      ...(efforts.includes(defaultEffort) ? { defaultReasoningEffort: defaultEffort } : {}),
+      ...(efforts.includes(defaultEffort) ? { defaultReasoningEffort: canonicalEffort(defaultEffort) } : {}),
     };
   });
 }
@@ -91,7 +92,7 @@ async function grokModels(value, baseline, { query }) {
       input: text.input_modalities?.includes('image') ? ['text', 'image'] : ['text'],
       reasoning: efforts ? efforts.some(effort => effort !== 'none') : known?.reasoning === true,
       thinkingLevelMap: efforts ? effortMap(efforts) : known?.thinkingLevelMap ?? effortMap([]),
-      ...(efforts?.includes(capabilities.default_reasoning_effort) ? { defaultReasoningEffort: capabilities.default_reasoning_effort } : {}),
+      ...(efforts?.includes(capabilities.default_reasoning_effort) ? { defaultReasoningEffort: canonicalEffort(capabilities.default_reasoning_effort) } : {}),
     }];
   });
 }
