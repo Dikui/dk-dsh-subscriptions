@@ -122,12 +122,13 @@ async function catalogJson(response) {
   } finally { reader.releaseLock(); }
 }
 
-// One auth/HTTP boundary for all vendors. Refresh via the official resolver before
-// capturing identity: a first refresh must not invalidate its own discovery.
+// One auth/HTTP boundary for all vendors. Raw identity reads stay local; the
+// shared catalog flight owns official OAuth refresh as well as metadata HTTP.
 function remoteSource({ endpoint, normalize, scope = 'account', headers = () => ({}) }) {
   return ({ baseModels, clientVersion, readCredential, getAuth, fetchCatalog }) => ({
     scope,
-    async readIdentity(signal) {
+    async readIdentity(signal) { return fingerprint(await readCredential(signal)); },
+    async resolveIdentity(signal) {
       if (!fingerprint(await readCredential(signal))) return undefined;
       const resolved = await getAuth(signal); // Official resolver safely persists rotation.
       if (resolved?.source !== 'OAuth') fail('MODEL_CATALOG_DENIED');

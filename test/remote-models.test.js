@@ -158,6 +158,42 @@ test('catalog auth refresh is bounded by the same ten-second metadata deadline',
   assert.deepEqual(catalog.getModels(), []);
 });
 
+// small/regression — OAuth resolution belongs to the shared failure TTL, not every list reader.
+test('failed OAuth refresh is shared, visible and cached until refresh or credential replacement', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 100000 });
+  let credential = { type: 'oauth', access: 'SYNTHETIC-EXPIRED', refresh: 'SYNTHETIC-REFRESH', expires: 0 };
+  let authCalls = 0, denied = true;
+  const catalog = createAccountModels(accountModelSources.get('kimi-coding')({ baseModels: baselines['kimi-coding'],
+    readCredential: async () => credential,
+    getAuth: async () => {
+      authCalls++;
+      if (denied) throw new Error('UPSTREAM-TOKEN-SECRET');
+      return { source: 'OAuth', auth: { headers: { Authorization: `Bearer ${credential.access}` } } };
+    },
+    fetchCatalog: async () => Response.json({ data: [{ id: 'remote', context_length: 100000 }] }),
+  }));
+  const failures = await Promise.all(Array.from({ length: 5 }, () => catalog.ensure().then(() => 'ready', error => error.code)));
+  assert.deepEqual(failures, Array(5).fill('MODEL_CATALOG_FAILED'));
+  assert.equal(authCalls, 1);
+  assert.equal(catalog.status().state, 'error');
+  assert.equal(catalog.status().error, 'MODEL_CATALOG_FAILED');
+  assert.deepEqual(catalog.getModels(), []);
+  await assert.rejects(catalog.ensure(), { code: 'MODEL_CATALOG_FAILED' });
+  assert.equal(authCalls, 1);
+  t.mock.timers.tick(60001);
+  await assert.rejects(catalog.ensure(), { code: 'MODEL_CATALOG_FAILED' });
+  assert.equal(authCalls, 2);
+  await assert.rejects(catalog.ensure({ force: true }), { code: 'MODEL_CATALOG_FAILED' });
+  assert.equal(authCalls, 3);
+  denied = false;
+  credential = { ...credential, access: 'SYNTHETIC-RECONNECTED', refresh: 'SYNTHETIC-RECONNECTED-REFRESH' };
+  await catalog.ensure();
+  assert.equal(authCalls, 4);
+  assert.equal(catalog.status().state, 'ready');
+  assert.deepEqual(catalog.getModels().map(model => model.id), ['remote']);
+  assert.doesNotMatch(JSON.stringify(catalog.status()), /SECRET|SYNTHETIC/);
+});
+
 // small/regression — token rotation must not make concurrent readers invalidate each other.
 test('concurrent readers share the refreshed token catalog after credential rotation', async () => {
   const f = fixture('kimi-coding', async () => Response.json({ data: [{ id: 'remote', context_length: 100000 }] }));

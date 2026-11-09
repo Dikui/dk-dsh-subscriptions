@@ -24,7 +24,7 @@ function validatedModels(value) {
 
 // Sources provide an opaque account identity and normalized native model descriptors.
 // Identity is never public; one instance owns one vendor's cache and in-flight query.
-export function createAccountModels({ readIdentity, loadModels, scope = 'account', onChange = () => {} }) {
+export function createAccountModels({ readIdentity, resolveIdentity = readIdentity, loadModels, scope = 'account', onChange = () => {} }) {
   let models = [], owner, generation = 0, identityGeneration = 0, flight, checkedAt = 0;
   let identityController = new AbortController();
   let state = { source: 'account', scope, state: 'unloaded', error: null, updatedAt: null };
@@ -79,6 +79,13 @@ export function createAccountModels({ readIdentity, loadModels, scope = 'account
     state = { source: 'account', scope, state: 'loading', error: null, updatedAt: null };
     models = [];
     current.promise = (async () => {
+      const resolved = await waitFor(resolveIdentity(requestSignal), requestSignal);
+      if (generation !== current.generation) fail('MODEL_CATALOG_CHANGED');
+      if (typeof resolved !== 'string' || !resolved) fail('MISSING_CREDENTIAL');
+      // Official refresh may rotate this grant. Adopt it within this flight without
+      // invalidating the callers sharing it, then fence the final metadata by that grant.
+      initial = resolved;
+      owner = resolved;
       const next = validatedModels(await waitFor(loadModels({ identity: initial, signal: requestSignal }), requestSignal));
       const latest = await waitFor(readIdentity(requestSignal), requestSignal);
       if (generation !== current.generation || latest !== initial) fail('MODEL_CATALOG_CHANGED');
