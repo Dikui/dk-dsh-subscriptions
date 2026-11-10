@@ -90,6 +90,19 @@ test('login, logout, missing OAuth and dispose invalidate only the owning quota'
   assert.ok([...f.accountQuotas.values()].every(quota => quota.status().state === 'unloaded'));
 });
 
+test('disposing during explicit quota credential lookup cannot start a new request', async () => {
+  const started = Promise.withResolvers(), release = Promise.withResolvers();
+  const api = createSubscriptions({
+    credentials: { readRecord: async () => { started.resolve(); return release.promise; } },
+    authorization: {}, catalog: [{ id: 'kimi-coding', auth: { oauth: {} } }], keyFor: id => id, llm: {},
+    accountQuotas: new Map([['kimi-coding', { clear() {}, ensure: () => assert.fail('disposed refresh must not query quota') }]]),
+  });
+  const refresh = api.refreshQuota('kimi-coding'); await started.promise;
+  api.dispose();
+  release.resolve({ kind: 'grant', payload: { type: 'oauth', access: 'SECRET', expires: 1 } });
+  await assert.rejects(refresh, { code: 'UNAVAILABLE' });
+});
+
 test('disposing during status model discovery cannot start a new quota request', async () => {
   const started = Promise.withResolvers(), release = Promise.withResolvers();
   const quota = createAccountQuota(accountQuotaSources.get('kimi-coding')({

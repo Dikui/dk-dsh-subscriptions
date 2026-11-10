@@ -169,9 +169,14 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
   }
   async function refreshQuota(id, signal) {
     provider(id);
+    if (disposed) fail('UNAVAILABLE');
+    signal?.throwIfAborted();
     if (!accountQuotas.has(id)) fail('QUOTA_UNSUPPORTED');
+    const record = await credentials.readRecord(keyFor(id));
+    if (disposed) fail('UNAVAILABLE');
+    signal?.throwIfAborted();
     if (loggingOut.has(id) || tests.has(id) || attempts.get(id)?.state === 'running') fail('ALREADY_IN_FLIGHT');
-    if (!oauthRecord(await credentials.readRecord(keyFor(id)))) fail('MISSING_CREDENTIAL');
+    if (!oauthRecord(record)) fail('MISSING_CREDENTIAL');
     await accountQuotas.get(id).ensure({ force: true, signal });
     return { ok: true };
   }
