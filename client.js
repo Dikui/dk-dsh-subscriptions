@@ -23,6 +23,19 @@ window.__ModuleLoader__.load({
         grokNews: 'Grok and OpenCode', grokDocs: 'Official headless scripting docs',
         catalogVendor: 'Provider catalog · model access and subscription billing are not verified',
         accountModels: 'Remote model catalog', accountNoModels: 'No selectable remote models loaded',
+        quota: 'Subscription quota', quotaUnknown: 'Quota unknown', quotaUnloaded: 'Connect to load quota', quotaLoading: 'Loading quota…',
+        quotaUnsupported: 'No verified OAuth quota endpoint · quota unavailable', quotaPartial: 'Some quota details are unavailable',
+        refreshQuota: 'Refresh quota · no inference request', refreshingQuota: 'Refreshing quota…',
+        quotaRemaining: 'remaining', quotaResets: 'Resets', quotaUpdated: 'Updated', quotaStale: 'Stale · refresh to update', unknown: 'Unknown',
+        quotaShort: 'Quota', quotaNotConnected: 'Not connected', quotaUnsupportedShort: 'Unsupported', quotaUnavailableShort: 'Unavailable',
+        quotaPrimary: 'Primary limit', quotaSecondary: 'Secondary limit', quota5h: '5-hour limit', quota7d: '7-day limit',
+        quotaMonthTotal: 'Monthly total', quotaMonthCode: 'Monthly coding', quotaUsage: 'Usage limit', quotaWindow: 'Quota window',
+        quotaHours: 'h', quotaDays: 'days', quotaMinutes: 'min', quotaSeconds: 's',
+        quotaError: 'Could not fetch quota metadata. Model and authorization status are unaffected.',
+        quotaDenied: 'Quota endpoint rejected this credential or connection (HTTP 401/403). Reconnect or check the backend network.',
+        quotaInvalid: 'Quota metadata is missing or unsupported. Unknown values are not zero or unlimited.',
+        quotaRateLimit: 'Quota metadata was rate limited. Wait before refreshing; no inference request was sent.',
+        quotaChanged: 'The credential changed during quota discovery. Refresh quota.',
         refreshModels: 'Refresh model catalog · no inference request', refreshingModels: 'Refreshing model catalog…',
         catalogError: 'Could not fetch the remote model catalog. Check the backend network, then refresh. No static model names were substituted.',
         catalogDenied: 'The model catalog endpoint rejected this credential or connection (HTTP 401/403). Check authorization and the backend network, then refresh.',
@@ -75,6 +88,19 @@ window.__ModuleLoader__.load({
         grokNews: 'Grok 与 OpenCode', grokDocs: '官方无头脚本文档',
         catalogVendor: '厂商远端目录 · 未验证逐模型权限或订阅扣费',
         accountModels: '远端模型目录', accountNoModels: '尚未加载可选择的远端模型',
+        quota: '订阅额度', quotaUnknown: '额度未知', quotaUnloaded: '连接后加载额度', quotaLoading: '正在加载额度…',
+        quotaUnsupported: '没有已验证的 OAuth 额度接口 · 额度不可用', quotaPartial: '部分额度信息不可用',
+        refreshQuota: '刷新额度 · 不发送推理请求', refreshingQuota: '正在刷新额度…',
+        quotaRemaining: '剩余', quotaResets: '重置', quotaUpdated: '更新于', quotaStale: '数据已过期 · 请刷新', unknown: '未知',
+        quotaShort: '额度', quotaNotConnected: '未连接', quotaUnsupportedShort: '不支持', quotaUnavailableShort: '不可用',
+        quotaPrimary: '主要限额', quotaSecondary: '次要限额', quota5h: '5 小时限额', quota7d: '7 天限额',
+        quotaMonthTotal: '每月总额度', quotaMonthCode: '每月编码额度', quotaUsage: '使用限额', quotaWindow: '额度窗口',
+        quotaHours: '小时', quotaDays: '天', quotaMinutes: '分钟', quotaSeconds: '秒',
+        quotaError: '未能获取额度元数据，不影响模型和授权状态。',
+        quotaDenied: '额度接口拒绝了此凭证或连接（HTTP 401/403），请重新连接或检查后台网络。',
+        quotaInvalid: '额度元数据缺失或无法识别，未知值不代表零或无限额度。',
+        quotaRateLimit: '额度查询被限流，请稍后刷新；未发送推理请求。',
+        quotaChanged: '查询额度期间凭证发生变化，请刷新额度。' ,
         refreshModels: '刷新模型目录 · 不发送推理请求', refreshingModels: '正在刷新模型目录…',
         catalogError: '未能获取远端模型目录。请检查后台网络后刷新；没有使用静态模型名称代替。',
         catalogDenied: '模型目录接口拒绝了此凭证或连接（HTTP 401/403）。请检查授权和后台网络后刷新。',
@@ -119,6 +145,8 @@ window.__ModuleLoader__.load({
       OAUTH_CALLBACK_MISMATCH: 'callbackError', OAUTH_ACCOUNT_INVALID: 'accountError', NETWORK_FAILED: 'networkError',
       MODEL_CATALOG_FAILED: 'catalogError', MODEL_CATALOG_DENIED: 'catalogDenied', MODEL_CATALOG_INVALID: 'catalogInvalid',
       MODEL_CATALOG_RATE_LIMIT: 'catalogRateLimit', MODEL_CATALOG_CHANGED: 'catalogChanged', MODEL_CATALOG_UNAVAILABLE: 'catalogUnavailable',
+      QUOTA_FAILED: 'quotaError', QUOTA_DENIED: 'quotaDenied', QUOTA_INVALID: 'quotaInvalid',
+      QUOTA_RATE_LIMIT: 'quotaRateLimit', QUOTA_CHANGED: 'quotaChanged', QUOTA_UNSUPPORTED: 'quotaUnsupported',
     };
     // Kimi's device-code API and browser verification page use different hosts.
     // xAI's official CLI pins accounts.x.ai as its accounts/consent origin; unknown device hosts fail closed.
@@ -139,6 +167,20 @@ window.__ModuleLoader__.load({
           && (attempt.prompt.placeholder == null || typeof attempt.prompt.placeholder === 'string')
           && (attempt.prompt.kind !== 'select' || (Array.isArray(attempt.prompt.options)
             && attempt.prompt.options.every(o => o && typeof o.id === 'string' && typeof o.label === 'string')))));
+    }
+    const quotaIds = ['primary', 'secondary', 'limit_5h', 'limit_7d', 'limit_month_total', 'limit_month_code', 'usage'];
+    const timestamp = value => value === null || (Number.isFinite(value) && value > 0 && value <= 8640000000000000);
+    function validQuota(quota, configured) {
+      return quota && ['account', 'none'].includes(quota.source)
+        && ['unloaded', 'loading', 'ready', 'partial', 'error', 'unsupported'].includes(quota.state)
+        && (quota.error === null || ['QUOTA_FAILED', 'QUOTA_DENIED', 'QUOTA_INVALID', 'QUOTA_RATE_LIMIT', 'QUOTA_CHANGED', 'QUOTA_UNSUPPORTED', 'MISSING_CREDENTIAL'].includes(quota.error))
+        && timestamp(quota.updatedAt) && typeof quota.stale === 'boolean' && Array.isArray(quota.windows) && quota.windows.length <= 101
+        && new Set(quota.windows.map(window => window?.id)).size === quota.windows.length
+        && quota.windows.every(window => window && (quotaIds.includes(window.id) || /^limit-\d{1,2}$/.test(window.id))
+          && (window.usedPercent === null || (Number.isFinite(window.usedPercent) && window.usedPercent >= 0 && window.usedPercent <= 100))
+          && (window.windowSeconds === null || (Number.isSafeInteger(window.windowSeconds) && window.windowSeconds > 0)) && timestamp(window.resetsAt))
+        && (['ready', 'partial'].includes(quota.state) ? quota.source === 'account' && configured && quota.updatedAt !== null && quota.windows.length > 0 : quota.windows.length === 0)
+        && (quota.state !== 'unsupported' || quota.source === 'none');
     }
     function validStatus(data) {
       return data && (data.vendorTools === undefined || (typeof data.vendorTools?.kimiDatasource?.enabled === 'boolean'
@@ -189,6 +231,8 @@ window.__ModuleLoader__.load({
       .subscriptions-lite .sl-badge{padding:3px 9px;border-radius:20px;background:var(--dsw-alias-bg-layer-2);white-space:nowrap}
       .subscriptions-lite .sl-details{border-top:1px solid var(--dsw-alias-border-l1);padding-top:14px}.subscriptions-lite .sl-details summary{cursor:pointer;color:var(--dsw-alias-label-secondary)}
       .subscriptions-lite .sl-details>div{display:grid;gap:10px;margin-top:12px}
+      .subscriptions-lite .sl-quota{border-top:1px solid var(--dsw-alias-border-l1);padding-top:12px;display:grid;gap:8px;min-width:0;overflow-wrap:anywhere}
+      .subscriptions-lite .sl-quota-row{display:grid;gap:4px}.subscriptions-lite progress{width:100%;height:8px;accent-color:var(--dsw-alias-brand-primary)}
     `;
     return {
       inject: ['slots', 'locale'],
@@ -200,6 +244,173 @@ window.__ModuleLoader__.load({
         const t = ctx.locale.bind(namespace);
         const subscribe = listener => ctx.locale.subscribe(listener);
         const snapshot = () => ctx.locale.getSnapshot();
+    const errorText = code => t(errorKeys[code] || 'requestError');
+    const quotaNames = { primary: 'quotaPrimary', secondary: 'quotaSecondary', limit_5h: 'quota5h', limit_7d: 'quota7d',
+      limit_month_total: 'quotaMonthTotal', limit_month_code: 'quotaMonthCode', usage: 'quotaUsage' };
+    const quotaFixedPeriods = ['limit_5h', 'limit_7d', 'limit_month_total', 'limit_month_code'];
+    const chineseLocale = () => ((typeof snapshot() === 'string' ? snapshot() : snapshot()?.active) || '').startsWith('zh');
+    const quotaDate = (chinese, value) => value === null ? t('unknown') : new Date(value).toLocaleString(chinese ? 'zh-CN' : 'en-US');
+    function quotaPeriod(chinese, value) {
+      if (value === null) return '';
+      const [unit, divisor] = value % 86400 === 0 ? ['quotaDays', 86400] : value % 3600 === 0 ? ['quotaHours', 3600]
+        : value % 60 === 0 ? ['quotaMinutes', 60] : ['quotaSeconds', 1];
+      return `${value / divisor} ${t(unit)}`;
+    }
+    function quotaLowest(quota) {
+      const values = quota.windows.filter(window => window.usedPercent !== null).map(window => Math.round((100 - window.usedPercent) * 10) / 10);
+      return values.length ? Math.min(...values) : null;
+    }
+    // One renderer for both surfaces: settings card and composer popover.
+    function quotaBody({ quota, configured, busy, disabled, refresh }) {
+      const chinese = chineseLocale();
+      return h(React.Fragment, null,
+        quota.state === 'unsupported' && h('p', { className: 'sl-status', role: 'status' }, t('quotaUnsupported')),
+        ['unloaded', 'loading'].includes(quota.state) && h('p', { className: 'sl-status', role: 'status' },
+          t(quota.state === 'loading' ? 'quotaLoading' : configured ? 'quotaUnknown' : 'quotaUnloaded')),
+        quota.state === 'error' && h('p', { className: 'sl-error', role: 'alert' }, errorText(quota.error)),
+        quota.state === 'partial' && h('p', { className: 'sl-status', role: 'status' }, t('quotaPartial')),
+        quota.windows.map(window => {
+          const label = t(quotaNames[window.id] ?? 'quotaWindow');
+          const remaining = window.usedPercent === null ? t('unknown') : `${Math.round((100 - window.usedPercent) * 10) / 10}%`;
+          const period = quotaFixedPeriods.includes(window.id) ? '' : quotaPeriod(chinese, window.windowSeconds);
+          return h('div', { key: window.id, className: 'sl-quota-row' },
+            h('span', null, `${label}${period ? ` · ${period}` : ''} · ${chinese ? `${t('quotaRemaining')} ${remaining}` : `${remaining} ${t('quotaRemaining')}`}`),
+            window.usedPercent !== null && h('progress', { max: 100, value: 100 - window.usedPercent, 'aria-label': `${label} · ${t('quotaRemaining')}` }),
+            h('span', { className: 'sl-status' }, `${t('quotaResets')}: ${quotaDate(chinese, window.resetsAt)}`));
+        }),
+        quota.updatedAt != null && h('p', { className: 'sl-status', role: 'status' },
+          `${t('quotaUpdated')}: ${quotaDate(chinese, quota.updatedAt)}${quota.stale ? ` · ${t('quotaStale')}` : ''}`),
+        refresh && quota.state !== 'unsupported' && configured && h('button', { type: 'button', disabled: disabled || busy, onClick: refresh },
+          t(busy ? 'refreshingQuota' : 'refreshQuota')));
+    }
+    const quotaStyles = `
+      .slq{display:inline-flex;min-width:0;flex:none}
+      .slq-trigger{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-caption);cursor:pointer}
+      .slq-trigger[aria-expanded=true],.slq-trigger:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}
+      .slq-trigger:focus-visible{outline:2px solid var(--dsw-focus-ring-color);outline-offset:2px}
+      @media(hover:hover){.slq-trigger:hover{background:var(--dsw-alias-interactive-bg-hover)}}
+      .slq-panel{position:fixed;z-index:1100;box-sizing:border-box;display:grid;gap:8px;max-height:min(480px,calc(100vh - 72px));overflow-y:auto;padding:12px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg,12px);background:var(--dsw-specific-menu,var(--dsw-alias-bg-layer-1));box-shadow:var(--dsw-elevation-prominent,0 8px 24px #0003);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+      .slq-head{display:flex;align-items:center;gap:8px}.slq-head strong{color:var(--dsw-alias-label-primary);font-size:13px}
+      .slq-panel .sl-quota-row{display:grid;gap:3px}.slq-panel progress{width:100%;height:4px;accent-color:var(--dsw-alias-brand-primary)}
+      .slq-panel .sl-status{font-size:11px;color:var(--dsw-alias-label-caption)}.slq-panel .sl-error{color:var(--dsw-alias-state-error-primary)}
+      .slq-panel button{font:inherit;color:inherit;background:transparent;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:4px 8px;cursor:pointer}
+      .slq-panel button:disabled{opacity:.5;cursor:not-allowed}
+      .slq-close{margin-inline-start:auto;border:0;background:transparent;color:inherit;font:inherit;font-size:16px;line-height:16px;padding:2px 4px;cursor:pointer;border-radius:4px}
+      .slq-close:hover{background:var(--dsw-alias-interactive-bg-hover)}
+      .slq-section{display:grid;gap:6px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l1)}
+      .slq-provider{color:var(--dsw-alias-label-primary);font-size:12px;font-weight:600}
+    `;
+    const quotaProviderNames = { 'openai-codex': 'OpenAI · ChatGPT', 'kimi-coding': 'Kimi Code', xai: 'Grok' };
+    const quotaProviders = ['openai-codex', 'kimi-coding', 'xai'];
+    const quotaIcon = h('svg', { viewBox: '0 0 16 16', width: 15, height: 15, 'aria-hidden': true, focusable: false },
+      h('path', { d: 'M2.8 12.2a5.2 5.2 0 0 1 10.4 0', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4, 'stroke-linecap': 'round' }),
+      h('path', { d: 'M8 12.2 10.5 8.4', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4, 'stroke-linecap': 'round' }),
+      h('circle', { cx: 8, cy: 12.2, r: 1.1, fill: 'currentColor' }));
+    // Sidebar footer gauge: every subscription account, refreshed when hovered.
+    function SidebarQuota() {
+      React.useSyncExternalStore(subscribe, snapshot, snapshot);
+      const [items, setItems] = React.useState(null);
+      const [open, setOpen] = React.useState(false);
+      const [position, setPosition] = React.useState(null);
+      const [busy, setBusy] = React.useState(false);
+      const generation = React.useRef(0), active = React.useRef(null), trigger = React.useRef(null), closeTimer = React.useRef(null);
+      async function send(id, force, signal) {
+        const response = await fetch('/api/subscriptions-lite', { method: 'POST', credentials: 'same-origin', cache: 'no-store', signal,
+          headers: { 'Content-Type': 'application/json', 'X-Subscriptions-Lite': '1' },
+          body: JSON.stringify({ action: force ? 'quota' : 'quota-state', provider: id }) });
+        const value = await response.json();
+        if (!response.ok || value?.error) throw new Error(typeof value?.error === 'string' ? value.error : 'REQUEST_FAILED');
+        if (value.provider !== id || typeof value.configured !== 'boolean' || !value.quota
+          || !validQuota(value.quota, value.configured)) throw new Error('BAD_RESPONSE');
+        return value;
+      }
+      async function refresh(force = false) {
+        const version = ++generation.current;
+        active.current?.abort();
+        const controller = new AbortController(); active.current = controller;
+        const known = new Map((items ?? []).map(item => [item.id, Boolean(item.configured)]));
+        setBusy(true);
+        const results = await Promise.all(quotaProviders.map(async id => {
+          try { const value = await send(id, force && known.get(id) === true, controller.signal); return { id, ...value }; }
+          catch (cause) { return { id, error: controller.signal.aborted ? 'ABORTED' : cause.message }; }
+        }));
+        if (generation.current !== version) return;
+        setBusy(false);
+        setItems(results);
+      }
+      React.useEffect(() => {
+        refresh();
+        return () => { generation.current++; active.current?.abort(); };
+      }, []);
+      React.useEffect(() => {
+        const doc = typeof document === 'undefined' ? null : document;
+        if (!open || !doc || !window.addEventListener) return;
+        const close = () => setOpen(false);
+        const onKey = event => { if (event.key === 'Escape') { cancelClose(); close(); trigger.current?.focus?.(); } };
+        const onPointer = event => { if (!event.target?.closest?.('.slq')) close(); };
+        const onScroll = event => { if (!event.target?.closest?.('.slq-panel')) close(); };
+        doc.addEventListener('keydown', onKey);
+        doc.addEventListener('pointerdown', onPointer);
+        window.addEventListener('scroll', onScroll, true);
+        window.addEventListener('resize', close);
+        return () => { doc.removeEventListener('keydown', onKey); doc.removeEventListener('pointerdown', onPointer);
+          window.removeEventListener('scroll', onScroll, true); window.removeEventListener('resize', close); };
+      }, [open]);
+      function cancelClose() {
+        if (closeTimer.current !== null) { clearTimeout(closeTimer.current); closeTimer.current = null; }
+      }
+      function scheduleClose() {
+        cancelClose();
+        closeTimer.current = setTimeout(() => { closeTimer.current = null; setOpen(false); }, 150);
+      }
+      React.useEffect(() => () => clearTimeout(closeTimer.current), []);
+      function openPanel() {
+        cancelClose();
+        const rect = trigger.current?.getBoundingClientRect?.();
+        const viewportWidth = typeof window.innerWidth === 'number' ? window.innerWidth : 0;
+        const viewportHeight = typeof window.innerHeight === 'number' ? window.innerHeight : 0;
+        const width = viewportWidth ? Math.min(300, viewportWidth - 16) : 300;
+        setPosition(rect && viewportWidth && viewportHeight
+          ? { width, left: Math.max(8, Math.min(rect.left, viewportWidth - width - 8)), bottom: viewportHeight - rect.top + 8 }
+          : { width });
+        setOpen(true);
+        if (!busy) refresh();
+      }
+      function toggle() {
+        if (open) setOpen(false);
+        else openPanel();
+      }
+      const chinese = chineseLocale();
+      const list = items ?? [];
+      const configured = list.filter(item => item.configured && item.quota);
+      const lowests = configured.map(item => quotaLowest(item.quota)).filter(value => value !== null);
+      const percent = lowests.length ? `${Math.round(Math.min(...lowests) * 10) / 10}%` : null;
+      const failed = items !== null && list.length > 0 && list.every(item => item.error);
+      const value = failed ? t('quotaUnavailableShort')
+        : items === null ? '\u2026'
+        : !configured.length ? t('quotaNotConnected')
+        : percent ?? t('quotaUnknown');
+      const title = percent ? `${t('quota')} · ${chinese ? `${t('quotaRemaining')} ${percent}` : `${percent} ${t('quotaRemaining')}`}`
+        : `${t('quota')} · ${value === '\u2026' ? t('quotaLoading') : value}`;
+      return h('div', { className: 'slq' },
+        h('style', null, quotaStyles),
+        h('button', { ref: trigger, type: 'button', className: 'slq-trigger', 'aria-haspopup': 'dialog', 'aria-expanded': open,
+          title, 'aria-label': title, onClick: toggle, onMouseEnter: openPanel, onMouseLeave: scheduleClose }, quotaIcon),
+        open && h('div', { className: 'slq-panel', role: 'dialog', 'aria-label': t('quota'), style: position ?? undefined,
+          onMouseEnter: cancelClose, onMouseLeave: scheduleClose },
+          h('div', { className: 'slq-head' }, h('strong', null, t('quota')),
+            h('button', { type: 'button', className: 'slq-close', 'aria-label': t('close'), onClick: () => setOpen(false) }, '\u00d7')),
+          items === null
+            ? h('p', { className: 'sl-status', role: 'status' }, t('quotaLoading'))
+            : h(React.Fragment, null,
+              list.map(item => h('div', { key: item.id, className: 'slq-section' },
+                h('div', { className: 'slq-provider' }, quotaProviderNames[item.id]),
+                item.error ? h('p', { className: 'sl-error', role: 'alert' }, errorText(item.error))
+                  : item.configured ? quotaBody({ quota: item.quota, configured: true, busy, disabled: busy })
+                  : h('p', { className: 'sl-status', role: 'status' }, t('quotaNotConnected')))),
+              h('button', { type: 'button', disabled: busy || !configured.length, onClick: () => refresh(true) },
+                t(busy ? 'refreshingQuota' : 'refreshQuota')))));
+    }
         function Prompt({ prompt, disabled, answer }) {
           const [value, setValue] = React.useState('');
           const inputId = React.useId();
@@ -474,7 +685,14 @@ window.__ModuleLoader__.load({
               if (control.current?.active()) setCopyStates(previous => ({ ...previous, [provider]: 'copyHelp' }));
             }
           }
-          const errorText = code => t(errorKeys[code] || 'requestError');
+          function quotaView(provider, disabled, isRunning) {
+            const quota = provider.quota === undefined ? null : validQuota(provider.quota, provider.configured) ? provider.quota : { state: 'error', error: 'QUOTA_INVALID', windows: [] };
+            return h('section', { className: 'sl-quota', 'aria-label': t('quota') },
+              h('strong', null, t('quota')),
+              !quota ? h('p', { className: 'sl-status', role: 'status' }, t('quotaUnknown'))
+                : quotaBody({ quota, configured: provider.configured, busy: busy[provider.id] === 'quota',
+                  disabled: disabled || isRunning, refresh: () => run(provider.id, 'quota') }));
+          }
           const link = (url, label) => h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', referrerPolicy: 'no-referrer' }, label);
           return h('section', { className: 'subscriptions-lite', 'aria-label': t('title') },
             h('style', null, styles),
@@ -522,6 +740,7 @@ window.__ModuleLoader__.load({
                   provider.configured && h('button', { type: 'button', disabled: disabled || isRunning, onClick: () => {
                     if (window.confirm(t('logoutConfirm'))) run(provider.id, 'logout');
                   } }, t('logout'))),
+                quotaView(provider, disabled, isRunning),
                 provider.id === 'xai' && h('details', { className: 'sl-details' }, h('summary', null, t('billing')), h('div', null,
                   h('p', { className: 'sl-muted' }, t('xai')),
                   h('div', { className: 'sl-actions' }, link('https://x.ai/news/grok-opencode', t('grokNews')), link('https://docs.x.ai/build/cli/headless-scripting', t('grokDocs'))))),
@@ -568,16 +787,19 @@ window.__ModuleLoader__.load({
             })));
         }
         ctx.inject?.(['modelDirectories', 'sessions'], scope => {
+          const inject = sessionId => {
+            const directory = scope.modelDirectories.directoryFor(sessionId);
+            return { sessionId, directory: directory.store, load: () => {
+              if (scope.sessions.subagentAddress(sessionId) === undefined) directory.load().catch(() => {});
+            } };
+          };
           scope.slots.inject('conversation.input.right', () => scope.slots.register({
-            name: 'conversation.input.right', id: 'dk-subscriptions-speed', order: 90,
-            inject: sessionId => {
-              const directory = scope.modelDirectories.directoryFor(sessionId);
-              return { sessionId, directory: directory.store, load: () => {
-                if (scope.sessions.subagentAddress(sessionId) === undefined) directory.load().catch(() => {});
-              } };
-            },
+            name: 'conversation.input.right', id: 'dk-subscriptions-speed', order: 90, inject,
           }, Speed));
         });
+        ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
+          name: 'sidebar.footer.action', id: 'dk-subscriptions-quota', order: 20,
+        }, SidebarQuota));
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section', id: 'subscriptions-lite', order: 55, label: () => t('title'),
         }, Panel));

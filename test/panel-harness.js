@@ -5,8 +5,8 @@ import vm from 'node:vm';
 // Exercise the shipped Panel's event handlers and effects without a second
 // React installation. This is a deterministic hook harness, not a browser or
 // an assertion about browser popup policy / native shell behavior.
-export async function panelHarness({ fetch, open = () => null, clipboard, confirm = () => true, language = 'en', prompt, answer, speed }) {
-  let declaration, Panel, Prompt, Speed, cursor = 0, pendingRender = false, effects = [], tree;
+export async function panelHarness({ fetch, open = () => null, clipboard, confirm = () => true, language = 'en', localeSnapshot, prompt, answer, speed, quota }) {
+  let declaration, Panel, Prompt, Speed, SidebarQuota, cursor = 0, pendingRender = false, effects = [], tree;
   const cells = [], cleanups = [], timers = new Map(), dictionaries = new Map();
   let timerId = 0;
   const React = {
@@ -33,6 +33,7 @@ export async function panelHarness({ fetch, open = () => null, clipboard, confir
   };
   const sandbox = {
     URL, AbortController, fetch, navigator: { clipboard }, __capturePrompt(component) { Prompt = component; }, __captureSpeed(component) { Speed = component; },
+    __captureQuota(component) { SidebarQuota = component; },
     setTimeout(callback) { const id = ++timerId; timers.set(id, callback); return id; },
     clearTimeout(id) { timers.delete(id); },
     window: { __ModuleLoader__: { load(value) { declaration = value; } }, open, confirm },
@@ -41,20 +42,20 @@ export async function panelHarness({ fetch, open = () => null, clipboard, confir
   const marker = '        function Panel({ close }) {';
   assert.equal(source.split(marker).length, 2);
   // Capture the real nested component only inside this VM; shipped code has no test exports.
-  vm.runInNewContext(source.replace(marker, '        __capturePrompt(Prompt);\n        __captureSpeed(Speed);\n' + marker), sandbox);
+  vm.runInNewContext(source.replace(marker, '        __capturePrompt(Prompt);\n        __captureSpeed(Speed);\n        __captureQuota(SidebarQuota);\n' + marker), sandbox);
   const plugin = declaration.factory(name => { assert.equal(name, 'react'); return React; });
   plugin.apply({
     effect(fn) { cleanups.push(fn()); },
     locale: {
       register(ns, locale, values) { dictionaries.set(locale, values); return () => dictionaries.delete(locale); },
       bind() { return key => dictionaries.get(language)?.[key] ?? key; },
-      subscribe() { return () => {}; }, getSnapshot() { return language; },
+      subscribe() { return () => {}; }, getSnapshot() { return localeSnapshot ?? { active: language, revision: 1 }; },
     },
-    slots: { inject(name, callback) { callback(); }, register(options, component) { Panel = component; } },
+    slots: { inject(name, callback) { callback(); }, register(options, component) { if (options.name === 'sidebar.footer.action') SidebarQuota = component; else if (options.name === 'settings.section') Panel = component; } },
   });
   function render() {
     cursor = 0; pendingRender = false;
-    tree = speed ? Speed(speed) : prompt ? Prompt({ prompt, disabled: false, answer }) : Panel({ close() {} });
+    tree = quota ? SidebarQuota() : speed ? Speed(speed) : prompt ? Prompt({ prompt, disabled: false, answer }) : Panel({ close() {} });
     const callbacks = effects; effects = []; callbacks.forEach(callback => callback());
   }
   async function flush() {

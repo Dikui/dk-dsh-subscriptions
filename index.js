@@ -4,7 +4,8 @@ import { pathToFileURL } from 'node:url';
 import { PiAiAdapter, recordKeyFor } from '@deepseek-ai/dsh-llm-pi-ai';
 import { createHttpHandler, createSubscriptions, fail, PROVIDERS, safeError, subscriptionBindings } from './core.js';
 import { createAutoProxy } from './network.js';
-import { createAccountModels } from './models.js';
+import { createAccountModels, createAccountQuota } from './models.js';
+import { accountQuotaSources } from './quota-sources.js';
 import { accountModelSources } from './model-sources.js';
 import { createKimiTools } from './kimi-tools.js';
 import { createGrokSearchTool } from './grok-tools.js';
@@ -44,13 +45,19 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false }
   // Pin HTTPS SSE while automatic proxying is active; do not rely on WebSocket routing.
   const codex = bindings.profiles().get('subscription-openai-codex');
   if (network.enabled && codex) codex.transport = 'sse';
-  const accountModels = new Map();
+  const accountModels = new Map(), accountQuotas = new Map();
   const authModels = createModels(bindings.auth);
   for (const profile of bindings.profiles().values()) authModels.setProvider(profile.piProvider);
   for (const provider of PROVIDERS) {
     const source = accountModelSources.get(provider.id);
     if (!bindings.profiles().has(provider.route)) continue;
     const native = catalog.find(item => item.id === provider.id);
+    const quotaSource = accountQuotaSources.get(provider.id);
+    if (quotaSource) accountQuotas.set(provider.id, createAccountQuota(quotaSource({
+      readCredential: signal => bindings.auth.credentials.read(provider.route, { signal }),
+      getAuth: signal => network.run(() => authModels.getAuth(provider.route, { signal })),
+      fetchCatalog: (url, options) => network.run(() => fetch(url, options)),
+    })));
     if (!source) {
       accountModels.set(provider.id, null);
       native.getModels = native.getAllModels = () => [];
@@ -154,7 +161,7 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false }
   api = createSubscriptions({ authorization: {
     describe: key => ctx.authorization.describe(key),
     begin: request => network.run(() => ctx.authorization.begin(request)),
-  }, credentials: ctx.credentials, llm: ctx.llm, catalog, keyFor: recordKeyFor, accountModels,
+  }, credentials: ctx.credentials, llm: ctx.llm, catalog, keyFor: recordKeyFor, accountModels, accountQuotas,
     vendorTools: { kimiDatasource: kimiDatasourceStatus, grokXSearch: grokXSearchStatus } });
   // Startup warmup is a single lifetime-owned metadata operation, not a timer.
   // Deliberately not awaited: a slow catalog endpoint would otherwise delay the
@@ -164,11 +171,11 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false }
     requestBody: 'buffered', fetch: createHttpHandler(api) });
   ctx.tools.register({
     name: 'subscription_accounts',
-    description: 'Inspect subscription status and synchronized remote model catalogs for OpenAI, Kimi and Grok, force a metadata refresh, test a selected model, or clear local OAuth secrets. Status may query model metadata with shared official OAuth and refresh expired tokens, but never sends inference. Catalog scope distinguishes account metadata from the Grok vendor catalog; neither proves model access or subscription-only billing. No static catalog or API-key fallback. Never starts or completes login: the user authorizes in Settings → dk-subscriptions. Tests consume quota and Grok may incur extra charges. Logout signs out the shared official pi-ai route locally, without cancelling a plan or revoking the account remotely.',
+    description: 'Inspect subscription status, remote model catalogs and official quota metadata for OpenAI and Kimi (Grok quota is unsupported), force a metadata refresh, test a selected model, or clear local OAuth secrets. Status may query model/quota metadata with shared official OAuth and refresh expired tokens, but never sends inference. Catalog scope distinguishes account metadata from the Grok vendor catalog; neither proves model access or subscription-only billing. No static catalog or API-key fallback. Never starts or completes login: the user authorizes in Settings → dk-subscriptions. Tests consume quota and Grok may incur extra charges. Logout signs out the shared official pi-ai route locally, without cancelling a plan or revoking the account remotely.',
     parameters: {
       type: 'object', properties: {
-        action: { type: 'string', enum: ['status', 'models', 'test', 'logout'], description: 'status automatically synchronizes remote model metadata when stale. models forces a metadata refresh for the selected provider. Neither sends inference; catalog results are not entitlement verification. test sends a small coding prompt. logout removes the shared local OAuth grant only.' },
-        provider: { type: 'string', enum: PROVIDERS.map(p => p.id), description: 'Required for models, test and logout.' },
+        action: { type: 'string', enum: ['status', 'models', 'quota', 'test', 'logout'], description: 'status automatically synchronizes remote model/quota metadata when stale. models or quota forces that metadata refresh for the selected provider. None sends inference; catalog results are not entitlement verification. test sends a small coding prompt. logout removes the shared local OAuth grant only.' },
+        provider: { type: 'string', enum: PROVIDERS.map(p => p.id), description: 'Required for models, quota, test and logout.' },
         model: { type: 'string', description: 'Required for test: exact model id from status.' },
       }, required: ['action'], additionalProperties: false,
     },
@@ -183,6 +190,7 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false }
             providers: result.providers.map(({ attempt, ...p }) => ({ ...p, loginState: attempt?.state ?? null })) };
         }
         if (args.action === 'models') return await api.refreshModels(args.provider, exec.signal);
+        if (args.action === 'quota') return await api.refreshQuota(args.provider, exec.signal);
         if (args.action === 'test') return await api.test(args.provider, args.model, exec.signal);
         if (args.action === 'logout') return await api.logout(args.provider);
         return { error: 'INVALID_ACTION' };

@@ -109,7 +109,8 @@ function safeNotice(notice) {
   return result;
 }
 
-export function createSubscriptions({ authorization, credentials, llm, catalog, keyFor, accountModels = new Map(), vendorTools, timeoutMs = 15 * 60 * 1000 }) {
+export function createSubscriptions({ authorization, credentials, llm, catalog, keyFor, accountModels = new Map(), accountQuotas = new Map(), vendorTools, timeoutMs = 15 * 60 * 1000 }) {
+  let disposed = false;
   const attempts = new Map();
   const tests = new Map();
   const loggingOut = new Set();
@@ -151,11 +152,45 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     if (!models) fail('MODEL_CATALOG_UNAVAILABLE');
     await models.ensure(options);
   }
+  const unsupportedQuota = () => ({ source: 'none', state: 'unsupported', error: 'QUOTA_UNSUPPORTED', updatedAt: null, stale: false, windows: [] });
+  async function quotaStatus(id, signal) {
+    const quota = accountQuotas.get(id);
+    if (!quota) return unsupportedQuota();
+    if (disposed || signal?.aborted) return quota.status();
+    const record = await credentials.readRecord(keyFor(id));
+    if (disposed || signal?.aborted) return quota.status();
+    if (!oauthRecord(record) || attempts.get(id)?.state === 'running' || loggingOut.has(id)) {
+      quota.clear();
+      return quota.status();
+    }
+    try { await quota.ensure({ signal }); } catch { /* Quota failure never hides auth or models. */ }
+    if (attempts.get(id)?.state === 'running' || loggingOut.has(id)) quota.clear();
+    return quota.status();
+  }
+  // Narrow read for the composer badge: no catalog, auth attempt or account identity.
+  async function quotaState(id, signal) {
+    provider(id);
+    const configured = !!oauthRecord(await credentials.readRecord(keyFor(id)));
+    return { provider: id, configured, quota: await quotaStatus(id, signal) };
+  }
+  async function refreshQuota(id, signal) {
+    provider(id);
+    if (disposed) fail('UNAVAILABLE');
+    signal?.throwIfAborted();
+    if (!accountQuotas.has(id)) fail('QUOTA_UNSUPPORTED');
+    const record = await credentials.readRecord(keyFor(id));
+    if (disposed) fail('UNAVAILABLE');
+    signal?.throwIfAborted();
+    if (loggingOut.has(id) || tests.has(id) || attempts.get(id)?.state === 'running') fail('ALREADY_IN_FLIGHT');
+    if (!oauthRecord(record)) fail('MISSING_CREDENTIAL');
+    await accountQuotas.get(id).ensure({ force: true, signal });
+    return { ok: true };
+  }
   async function status(signal) {
     return { vendorTools, providers: await Promise.all(PROVIDERS.map(async p => {
       if (!p.route || !supported.has(p.id)) return { ...p, available: false, configured: false, credentialKind: null, models: [],
-        modelCatalog: { source: 'none', state: 'unavailable', error: null, updatedAt: null }, attempt: null };
-      const record = await credentials.readRecord(keyFor(p.id));
+        modelCatalog: { source: 'none', state: 'unavailable', error: null, updatedAt: null }, quota: unsupportedQuota(), attempt: null };
+      let record = await credentials.readRecord(keyFor(p.id));
       const flow = authorization.describe(keyFor(p.id));
       let modelCatalog = { source: 'none', state: 'unavailable', error: 'MODEL_CATALOG_UNAVAILABLE', updatedAt: null };
       if (accountModels.get(p.id)) {
@@ -168,11 +203,16 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
         modelCatalog = models?.status() ?? { source: 'account', state: 'unloaded', error: null, updatedAt: null };
         if (error) modelCatalog = { ...modelCatalog, source: 'account', state: 'error', error, updatedAt: null };
       }
+      await quotaStatus(p.id, signal);
+      record = await credentials.readRecord(keyFor(p.id));
+      const quotaCache = accountQuotas.get(p.id);
+      if (quotaCache && (!oauthRecord(record) || disposed || attempts.get(p.id)?.state === 'running' || loggingOut.has(p.id))) quotaCache.clear();
+      const quota = quotaCache?.status() ?? unsupportedQuota();
       const showModels = modelCatalog.source === 'account' && oauthRecord(record) && modelCatalog.state === 'ready' && attempts.get(p.id)?.state !== 'running';
       return { ...p, available: !!flow?.methods.some(method => method.id === 'oauth'),
         configured: !!oauthRecord(record), credentialKind: record?.kind ?? null,
         models: showModels ? catalog.find(item => item.id === p.id).getModels().map(({ id, name }) => ({ id, name })) : [],
-        modelCatalog, attempt: publicAttempt(attempts.get(p.id)) };
+        modelCatalog, quota, attempt: publicAttempt(attempts.get(p.id)) };
     })) };
   }
   async function refreshModels(id, signal) {
@@ -193,6 +233,7 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     const attempt = { id: randomUUID(), state: 'running', notices: [], prompt: null, controller: new AbortController() };
     attempts.set(id, attempt);
     accountModels.get(id)?.clear();
+    accountQuotas.get(id)?.clear();
     const timer = setTimeout(() => attempt.controller.abort(), timeoutMs);
     timer.unref?.();
     attempt.done = Promise.resolve().then(() => authorization.begin({
@@ -204,9 +245,11 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     })).then(async outcome => {
       attempt.state = outcome.status === 'authorized' ? 'authorized' : 'cancelled';
       accountModels.get(id)?.clear();
+      accountQuotas.get(id)?.clear();
       if (attempt.state === 'authorized' && !attempt.controller.signal.aborted) {
         // Metadata failure does not turn a successfully saved grant into a failed login.
         try { await ensureModels(id, { signal: attempt.controller.signal }); } catch { /* Catalog status is surfaced separately. */ }
+        await quotaStatus(id, attempt.controller.signal);
       }
     }).catch(error => {
       attempt.state = attempt.controller.signal.aborted ? 'cancelled' : 'failed';
@@ -250,6 +293,7 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
       });
       if (attempts.get(id) === attempt) attempts.delete(id);
       accountModels.get(id)?.clear();
+      accountQuotas.get(id)?.clear();
       return { ok: true };
     } finally { loggingOut.delete(id); }
   }
@@ -277,11 +321,13 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     } finally { tests.delete(id); }
   }
   function dispose() {
+    disposed = true;
     for (const attempt of attempts.values()) attempt.controller.abort();
     for (const controller of tests.values()) controller.abort();
     for (const models of accountModels.values()) models?.clear();
+    for (const quota of accountQuotas.values()) quota?.clear();
   }
-  return { status, login, answer, cancel, logout, test, refreshModels, dispose };
+  return { status, login, answer, cancel, logout, test, refreshModels, refreshQuota, quotaState, dispose };
 }
 
 // Connection authenticates and validates the original HTTP authority before
@@ -320,6 +366,8 @@ export function createHttpHandler(api) {
         case 'logout': return json(await api.logout(provider));
         case 'test': return json(await api.test(provider, model, request.signal));
         case 'models': return json(await api.refreshModels(provider, request.signal));
+        case 'quota': return json(await api.refreshQuota(provider, request.signal));
+        case 'quota-state': return json(await api.quotaState(provider, request.signal));
         case 'speed-state': return json(await api.speedState(body, request.signal));
         case 'speed-select': return json(await api.speedSelect(body, request.signal));
         default: fail('INVALID_ACTION');

@@ -24,6 +24,14 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 
 兼容性仅声明 **DSH 0.2.1-rc.5 和 0.2.2-rc.1**，官方 `@deepseek-ai/dsh-llm-pi-ai` 使用相同版本范围。0.1.8 修复旧版精确锁定导致 0.2.2-rc.1 安装或启动时被兼容性检查拒绝的问题；已在该桌面版本的 Node 24.21.0 下通过真实适配器的离线回归，不需要版本豁免。虽然 `PiAiAdapter` 是包导出，其构造 profile 的结构仍可能变化；其他版本需重新验证，不使用宽泛范围绕过版本限制。更新本地 bundle 后需完全退出并重启 DSH；若安装的是打包副本而非本目录链接，先通过插件管理器重新安装新版。
 
+## 订阅额度
+
+模型接入卡片显示官方元数据快照中的**剩余百分比**、限额窗口、重置时间及更新时间；未知字段不代表零或无限额度。DSH 左侧边栏底部（用户头像上方）另有一个小仪表图标，悬停展开全部账号的额度窗口、剩余比例、重置时间与更新时间；移开或按 Esc 收起，触屏和键盘可点击展开，每次展开拉取一次窄快照。未连接、不支持或失败在对应账号下说明。OpenAI 读取 `GET /backend-api/wham/usage`，Kimi 读取 `GET /coding/v1/usages`，兼容当前 `usages` 比例及旧版 `usage` / `limits`。复用共享 OAuth、官方刷新锁和插件网络作用域；不发送推理，不读取 API key。与模型目录一样，启动、登录完成及状态访问按需同步，成功或失败缓存 60 秒，不后台轮询；**刷新额度 · 不发送推理请求**或 `subscription_accounts { action: "quota", provider: "openai-codex" }` 可强制刷新。
+
+接口错误不会隐藏授权或模型状态。当前仅展示 OpenAI 主／次窗口；存在额外独立限额时标为「部分额度信息不可用」。不展示 credits、钱包或货币余额，不把目录成功当作额度保证。Grok 没有已验证的官方 OAuth 订阅额度接口，明确显示不可用，不调用需要独立管理密钥的计费 API。数据是查询时快照，刷新不保证推理权益或订阅专属扣费。
+
+来源：[OpenAI usage 请求](https://github.com/openai/codex/blob/main/codex-rs/backend-client/src/client/rate_limit_resets.rs)、[窗口结构](https://github.com/openai/codex/blob/main/codex-rs/codex-backend-openapi-models/src/models/rate_limit_window_snapshot.rs)、[Kimi 当前结构](https://github.com/MoonshotAI/kimi-code/blob/eb2035f3cad57cc12d4d5082ec626f7f0ea5f651/packages/oauth/src/managed-usage.ts)、[Kimi 旧结构](https://github.com/MoonshotAI/kimi-cli/blob/main/src/kimi_cli/ui/shell/usage.py)。验证只使用合成凭证和模拟网络；未查询真实账号或验证已安装 GUI。
+
 ## Kimi 数据工具（显式启用）
 
 打开 **设置 → dk-subscriptions → 数据工具**。页面只保留标题、状态和必要操作，费用提示收进默认关闭的 **费用说明**。未连接时点击 **前往连接** 返回模型接入页，不会自动开始授权；切换子页不打断授权，也不发送查询。

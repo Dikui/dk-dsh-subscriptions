@@ -121,11 +121,11 @@ function fingerprint(credential) {
 }
 
 // Bound both declared and streamed bytes before parsing untrusted metadata.
-async function catalogJson(response) {
+async function catalogJson(response, errorPrefix = 'MODEL_CATALOG') {
   const limit = 1024 * 1024;
   const length = Number(response.headers.get('content-length'));
-  if (Number.isFinite(length) && length > limit) { await response.body?.cancel(); fail('MODEL_CATALOG_INVALID'); }
-  if (!response.body) fail('MODEL_CATALOG_INVALID');
+  if (Number.isFinite(length) && length > limit) { await response.body?.cancel(); fail(`${errorPrefix}_INVALID`); }
+  if (!response.body) fail(`${errorPrefix}_INVALID`);
   const reader = response.body.getReader(), chunks = [];
   let size = 0;
   try {
@@ -133,41 +133,41 @@ async function catalogJson(response) {
       const { done, value } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > limit) { await reader.cancel(); fail('MODEL_CATALOG_INVALID'); }
+      if (size > limit) { await reader.cancel(); fail(`${errorPrefix}_INVALID`); }
       chunks.push(value);
     }
-    try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { fail('MODEL_CATALOG_INVALID'); }
+    try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { fail(`${errorPrefix}_INVALID`); }
   } finally { reader.releaseLock(); }
 }
 
 // One auth/HTTP boundary for all vendors. Raw identity reads stay local; the
 // shared catalog flight owns official OAuth refresh as well as metadata HTTP.
-function remoteSource({ endpoint, normalize, scope = 'account', headers = () => ({}) }) {
+export function remoteSource({ endpoint, normalize, scope = 'account', headers = () => ({}), errorPrefix = 'MODEL_CATALOG' }) {
   return ({ baseModels, clientVersion, readCredential, getAuth, fetchCatalog }) => ({
     scope,
     async readIdentity(signal) { return fingerprint(await readCredential(signal)); },
     async resolveIdentity(signal) {
       if (!fingerprint(await readCredential(signal))) return undefined;
       const resolved = await getAuth(signal); // Official resolver safely persists rotation.
-      if (resolved?.source !== 'OAuth') fail('MODEL_CATALOG_DENIED');
+      if (resolved?.source !== 'OAuth') fail(`${errorPrefix}_DENIED`);
       const credential = await readCredential(signal);
       if (!fingerprint(credential)) return undefined;
       const bearer = resolved.auth?.apiKey ?? new Headers(resolved.auth?.headers).get('authorization')?.replace(/^Bearer\s+/i, '');
-      if (credential.access !== bearer) fail('MODEL_CATALOG_CHANGED');
+      if (credential.access !== bearer) fail(`${errorPrefix}_CHANGED`);
       return fingerprint(credential);
     },
     async loadModels({ identity, signal }) {
       const credential = await readCredential(signal);
-      if (fingerprint(credential) !== identity) fail('MODEL_CATALOG_CHANGED');
+      if (fingerprint(credential) !== identity) fail(`${errorPrefix}_CHANGED`);
       async function query(url) {
         const response = await fetchCatalog(url, { method: 'GET', redirect: 'error', signal,
           headers: { authorization: `Bearer ${credential.access}`, accept: 'application/json', ...headers(credential) } });
         if (!response.ok) {
           await response.body?.cancel();
-          fail([401, 403].includes(response.status) ? 'MODEL_CATALOG_DENIED'
-            : response.status === 429 ? 'MODEL_CATALOG_RATE_LIMIT' : 'MODEL_CATALOG_FAILED');
+          fail([401, 403].includes(response.status) ? `${errorPrefix}_DENIED`
+            : response.status === 429 ? `${errorPrefix}_RATE_LIMIT` : `${errorPrefix}_FAILED`);
         }
-        return catalogJson(response);
+        return catalogJson(response, errorPrefix);
       }
       return normalize(await query(endpoint(clientVersion)), baseModels, { credential, query });
     },

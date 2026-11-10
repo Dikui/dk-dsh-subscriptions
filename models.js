@@ -24,23 +24,24 @@ function validatedModels(value) {
 
 // Sources provide an opaque account identity and normalized native model descriptors.
 // Identity is never public; one instance owns one vendor's cache and in-flight query.
-export function createAccountModels({ readIdentity, resolveIdentity = readIdentity, loadModels, scope = 'account', onChange = () => {} }) {
-  let models = [], owner, generation = 0, identityGeneration = 0, flight, checkedAt = 0;
+function createAccountMetadata({ readIdentity, resolveIdentity = readIdentity, loadValue, validate, empty, errorPrefix, scope = 'account', onChange = () => {} }) {
+  const code = suffix => `${errorPrefix}_${suffix}`;
+  let models = empty, owner, generation = 0, identityGeneration = 0, flight, checkedAt = 0;
   let identityController = new AbortController();
   let state = { source: 'account', scope, state: 'unloaded', error: null, updatedAt: null };
   function reset(preserveIdentityReaders = false) {
     generation++;
     if (!preserveIdentityReaders) {
       identityGeneration++;
-      identityController.abort(new SubscriptionError('MODEL_CATALOG_CHANGED'));
+      identityController.abort(new SubscriptionError(code('CHANGED')));
       identityController = new AbortController();
     }
-    flight?.controller.abort(new SubscriptionError('MODEL_CATALOG_CHANGED'));
+    flight?.controller.abort(new SubscriptionError(code('CHANGED')));
     flight = undefined;
     owner = undefined;
     checkedAt = 0;
-    const changed = models.length > 0;
-    models = [];
+    const changed = models !== empty;
+    models = empty;
     state = { source: 'account', scope, state: 'unloaded', error: null, updatedAt: null };
     if (changed) onChange();
   }
@@ -55,13 +56,13 @@ export function createAccountModels({ readIdentity, resolveIdentity = readIdenti
     try { initial = await waitFor(waitFor(Promise.resolve().then(() => readIdentity(identitySignal)), identitySignal), signal); }
     catch (error) {
       signal?.throwIfAborted();
-      if (readingGeneration !== identityGeneration || readingCatalogGeneration !== generation) fail('MODEL_CATALOG_CHANGED');
-      clear(); fail(error instanceof SubscriptionError ? error.code : 'MODEL_CATALOG_FAILED');
+      if (readingGeneration !== identityGeneration || readingCatalogGeneration !== generation) fail(code('CHANGED'));
+      clear(); fail(error instanceof SubscriptionError ? error.code : code('FAILED'));
     }
     signal?.throwIfAborted();
-    if (readingGeneration !== identityGeneration) fail('MODEL_CATALOG_CHANGED');
+    if (readingGeneration !== identityGeneration) fail(code('CHANGED'));
     if (typeof initial !== 'string' || !initial) {
-      if (readingCatalogGeneration !== generation) fail('MODEL_CATALOG_CHANGED');
+      if (readingCatalogGeneration !== generation) fail(code('CHANGED'));
       clear(); fail('MISSING_CREDENTIAL');
     }
     // A grant can be persisted just before the official resolver returns it. Its
@@ -73,7 +74,7 @@ export function createAccountModels({ readIdentity, resolveIdentity = readIdenti
       // Recheck a slow reader after another caller already moved to a new grant.
       // Old responses must not revert the owner; readers of the same rotated grant can coalesce.
       const latest = await waitFor(waitFor(readIdentity(identitySignal), identitySignal), signal);
-      if (readingGeneration !== identityGeneration || latest !== initial) fail('MODEL_CATALOG_CHANGED');
+      if (readingGeneration !== identityGeneration || latest !== initial) fail(code('CHANGED'));
       if (owner !== initial) { reset(true); owner = initial; }
     }
     if (flight) return waitFor(flight.promise, signal);
@@ -86,36 +87,52 @@ export function createAccountModels({ readIdentity, resolveIdentity = readIdenti
     // A caller leaving must not cancel another caller's shared metadata query.
     const requestSignal = AbortSignal.any([current.controller.signal, AbortSignal.timeout(10000)]);
     state = { source: 'account', scope, state: 'loading', error: null, updatedAt: null };
-    models = [];
+    models = empty;
     current.promise = (async () => {
       const resolved = await waitFor(resolveIdentity(requestSignal), requestSignal);
-      if (generation !== current.generation) fail('MODEL_CATALOG_CHANGED');
+      if (generation !== current.generation) fail(code('CHANGED'));
       if (typeof resolved !== 'string' || !resolved) fail('MISSING_CREDENTIAL');
       // Official refresh may rotate this grant. Adopt it within this flight without
       // invalidating the callers sharing it, then fence the final metadata by that grant.
       initial = resolved;
       owner = resolved;
       current.resolving = false;
-      const next = validatedModels(await waitFor(loadModels({ identity: initial, signal: requestSignal }), requestSignal));
+      const next = validate(await waitFor(loadValue({ identity: initial, signal: requestSignal }), requestSignal));
       const latest = await waitFor(readIdentity(requestSignal), requestSignal);
-      if (generation !== current.generation || latest !== initial) fail('MODEL_CATALOG_CHANGED');
+      if (generation !== current.generation || latest !== initial) fail(code('CHANGED'));
       requestSignal.throwIfAborted();
       models = next;
       checkedAt = Date.now();
       state = { source: 'account', scope, state: 'ready', error: null, updatedAt: checkedAt };
       onChange();
     })().catch(error => {
-      const code = generation !== current.generation ? 'MODEL_CATALOG_CHANGED'
-        : error instanceof SubscriptionError ? error.code : 'MODEL_CATALOG_FAILED';
+      const errorCode = generation !== current.generation ? code('CHANGED')
+        : error instanceof SubscriptionError ? error.code : code('FAILED');
       if (generation === current.generation) {
-        models = [];
+        models = empty;
         checkedAt = Date.now();
-        state = { source: 'account', scope, state: 'error', error: code, updatedAt: null };
+        state = { source: 'account', scope, state: 'error', error: errorCode, updatedAt: null };
         onChange();
       }
-      throw new SubscriptionError(code); // Never expose bodies, headers, credentials or upstream messages.
+      throw new SubscriptionError(errorCode); // Never expose bodies, headers, credentials or upstream messages.
     }).finally(() => { if (flight === current) flight = undefined; });
     return waitFor(current.promise, signal);
   }
-  return { ensure, clear, getModels: () => models, status: () => ({ ...state }) };
+  return { ensure, clear, getValue: () => models, status: () => ({ ...state }) };
+}
+
+export function createAccountModels({ loadModels, ...options }) {
+  const metadata = createAccountMetadata({ ...options, loadValue: loadModels, validate: validatedModels,
+    empty: [], errorPrefix: 'MODEL_CATALOG' });
+  return { ensure: metadata.ensure, clear: metadata.clear, status: metadata.status, getModels: metadata.getValue };
+}
+
+export function createAccountQuota({ loadModels, ...options }) {
+  const metadata = createAccountMetadata({ ...options, loadValue: loadModels, validate: value => value,
+    empty: null, errorPrefix: 'QUOTA' });
+  return { ensure: metadata.ensure, clear: metadata.clear, status() {
+    const state = metadata.status(), value = metadata.getValue();
+    return { ...state, state: state.state === 'ready' && value?.partial ? 'partial' : state.state,
+      stale: state.updatedAt !== null && Date.now() - state.updatedAt >= 60000, windows: value?.windows ?? [] };
+  } };
 }
