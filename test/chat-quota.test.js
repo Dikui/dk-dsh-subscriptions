@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { panelHarness } from './panel-harness.js';
 
-// small/spec — composer quota badge. Synthetic model directory and HTTP; no inference.
+// small/spec — composer quota icon. Synthetic model directory and HTTP; no inference.
 function fixture({ answer } = {}) {
   let current = { provider: 'subscription-openai-codex', model: 'gpt-5' };
   const calls = [], listeners = new Set();
@@ -38,17 +38,19 @@ function fixture({ answer } = {}) {
 
 const trigger = panel => panel.nodes().find(node => node.props?.className === 'slq-trigger');
 const dialog = panel => panel.nodes().find(node => node.props?.role === 'dialog');
+const label = panel => trigger(panel).props['aria-label'];
 
-test('composer badge shows the lowest remaining quota of the current subscription account', async () => {
+test('composer icon reports the lowest remaining quota of the current subscription account', async () => {
   for (const language of ['en', 'zh']) {
-    for (const [route, expected] of [['subscription-openai-codex', language === 'zh' ? '额度40%' : 'Quota40%'],
-      ['subscription-kimi-coding', language === 'zh' ? '额度90%' : 'Quota90%']]) {
+    for (const [route, expected] of [['subscription-openai-codex', '40%'], ['subscription-kimi-coding', '90%']]) {
       const f = fixture(); f.setModel(route, 'model');
       const panel = await panelHarness({ ...f, language });
       try {
         const badge = trigger(panel);
-        assert.ok(badge, 'badge renders next to the model selector');
-        assert.equal(panel.text(badge), expected);
+        assert.ok(badge, 'badge renders in the composer tools');
+        assert.equal(panel.text(badge), '', 'the trigger is icon-only');
+        assert.ok(badge.props['aria-label'].includes(expected), badge.props['aria-label']);
+        assert.equal(badge.props.title, badge.props['aria-label']);
         assert.equal(badge.props['aria-haspopup'], 'dialog');
         assert.equal(badge.props['aria-expanded'], false);
         assert.deepEqual(f.calls, [{ action: 'quota-state', provider: route === 'subscription-kimi-coding' ? 'kimi-coding' : 'openai-codex' }]);
@@ -64,6 +66,21 @@ test('badge stays out of unrelated models and does not request quota for them', 
   try {
     assert.equal(panel.tree, null);
     assert.deepEqual(f.calls, []);
+  } finally { panel.dispose(); }
+});
+
+test('hovering the icon opens the popover and leaving closes it', async () => {
+  const f = fixture();
+  const panel = await panelHarness(f);
+  try {
+    assert.equal(panel.nodes().some(node => node.props?.role === 'dialog'), false);
+    trigger(panel).props.onMouseEnter(); await panel.flush();
+    assert.ok(dialog(panel), 'hover opens the popover');
+    dialog(panel).props.onMouseEnter();
+    dialog(panel).props.onMouseLeave();
+    trigger(panel).props.onMouseLeave();
+    await panel.poll();
+    assert.equal(panel.nodes().some(node => node.props?.role === 'dialog'), false, 'leaving closes after the delay');
   } finally { panel.dispose(); }
 });
 
@@ -95,9 +112,9 @@ test('unsupported, disconnected and failing accounts read as such instead of a f
   const unsupported = fixture(); unsupported.setModel('subscription-xai', 'grok-4');
   const grok = await panelHarness(unsupported);
   try {
-    assert.equal(panelText(grok), 'QuotaUnsupported');
+    assert.ok(label(grok).includes('Unsupported'), label(grok));
     trigger(grok).props.onClick(); await grok.flush();
-    assert.equal(panelText(grok), 'QuotaUnsupported');
+    assert.ok(label(grok).includes('Unsupported'), label(grok));
     assert.ok(grok.text(dialog(grok)).includes('No verified OAuth quota endpoint'));
     assert.equal(grok.nodes().some(node => node.type === 'button' && node.props.className !== 'slq-close' && grok.text(node).includes('Refresh quota')), false,
       'nothing to refresh without a verified endpoint');
@@ -107,7 +124,7 @@ test('unsupported, disconnected and failing accounts read as such instead of a f
     quota: { source: 'none', state: 'unloaded', error: null, updatedAt: null, stale: false, windows: [] } }) });
   const offline = await panelHarness(disconnected);
   try {
-    assert.equal(panelText(offline), 'QuotaNot connected');
+    assert.ok(label(offline).includes('Not connected'), label(offline));
     trigger(offline).props.onClick(); await offline.flush();
     assert.ok(offline.text(dialog(offline)).includes('Connect to load quota'));
     assert.equal(offline.nodes().some(node => node.type === 'button' && offline.text(node).includes('Refresh quota')), false);
@@ -116,7 +133,7 @@ test('unsupported, disconnected and failing accounts read as such instead of a f
   const failing = fixture({ answer: () => Response.json({ error: 'QUOTA_DENIED' }, { status: 400 }) });
   const error = await panelHarness(failing);
   try {
-    assert.equal(panelText(error), 'QuotaUnavailable');
+    assert.ok(label(error).includes('Unavailable'), label(error));
     trigger(error).props.onClick(); await error.flush();
     const text = error.text(dialog(error));
     assert.ok(text.includes('Quota endpoint rejected this credential'), text);
@@ -135,15 +152,11 @@ test('a reply for a provider the user already left never replaces the current ac
   } });
   const panel = await panelHarness(f);
   try {
-    assert.equal(panelText(panel), 'Quota\u2026');
+    assert.ok(label(panel).includes('Loading quota'), label(panel));
     f.setModel('subscription-kimi-coding', 'kimi-k2'); await panel.rerender();
     gates.get('kimi-coding')(); await panel.flush();
-    assert.equal(panelText(panel), 'Quota90%');
+    assert.ok(label(panel).includes('90%'), label(panel));
     gates.get('openai-codex')(); await panel.flush();
-    assert.equal(panelText(panel), 'Quota90%', 'stale OpenAI reply is ignored after switching to Kimi');
+    assert.ok(label(panel).includes('90%'), 'stale OpenAI reply is ignored after switching to Kimi');
   } finally { panel.dispose(); }
 });
-
-function panelText(panel) {
-  return panel.text(trigger(panel));
-}

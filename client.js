@@ -285,11 +285,9 @@ window.__ModuleLoader__.load({
     }
     const quotaStyles = `
       .slq{display:inline-flex;min-width:0;flex:none}
-      .slq-trigger{display:inline-flex;align-items:center;gap:4px;max-width:180px;height:28px;padding:0 8px;border:0;border-radius:var(--dsw-radius-sm,4px);background:transparent;color:var(--dsw-alias-label-caption);font:inherit;font-size:13px;font-weight:400;line-height:20px;white-space:nowrap;cursor:pointer}
+      .slq-trigger{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--dsw-alias-label-caption);cursor:pointer}
       .slq-trigger[aria-expanded=true],.slq-trigger:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}
       .slq-trigger:focus-visible{outline:2px solid var(--dsw-focus-ring-color);outline-offset:2px}
-      .slq-value{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis}
-      .slq-muted{color:var(--dsw-alias-label-caption)}
       @media(hover:hover){.slq-trigger:hover{background:var(--dsw-alias-interactive-bg-hover)}}
       .slq-panel{position:fixed;z-index:1100;box-sizing:border-box;display:grid;gap:8px;max-height:min(320px,60vh);overflow-y:auto;padding:12px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg,12px);background:var(--dsw-specific-menu,var(--dsw-alias-bg-layer-1));box-shadow:var(--dsw-elevation-prominent,0 8px 24px #0003);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
       .slq-head{display:flex;align-items:center;gap:8px}.slq-head strong{color:var(--dsw-alias-label-primary);font-size:13px}
@@ -301,6 +299,10 @@ window.__ModuleLoader__.load({
       .slq-close:hover{background:var(--dsw-alias-interactive-bg-hover)}
     `;
     const quotaProviderByRoute = { 'subscription-openai-codex': 'openai-codex', 'subscription-kimi-coding': 'kimi-coding', 'subscription-xai': 'xai' };
+    const quotaIcon = h('svg', { viewBox: '0 0 16 16', width: 15, height: 15, 'aria-hidden': true, focusable: false },
+      h('path', { d: 'M2.8 12.2a5.2 5.2 0 0 1 10.4 0', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4, 'stroke-linecap': 'round' }),
+      h('path', { d: 'M8 12.2 10.5 8.4', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4, 'stroke-linecap': 'round' }),
+      h('circle', { cx: 8, cy: 12.2, r: 1.1, fill: 'currentColor' }));
     function Quota({ directory, load }) {
       React.useSyncExternalStore(subscribe, snapshot, snapshot);
       const state = React.useSyncExternalStore(fn => directory.subscribe(fn), () => directory.getSnapshot());
@@ -310,7 +312,7 @@ window.__ModuleLoader__.load({
       const [open, setOpen] = React.useState(false);
       const [position, setPosition] = React.useState(null);
       const [busy, setBusy] = React.useState(false);
-      const generation = React.useRef(0), active = React.useRef(null), trigger = React.useRef(null);
+      const generation = React.useRef(0), active = React.useRef(null), trigger = React.useRef(null), closeTimer = React.useRef(null);
       React.useEffect(() => { load(); }, [load]);
       async function send(action, signal) {
         const response = await fetch('/api/subscriptions-lite', { method: 'POST', credentials: 'same-origin', cache: 'no-store', signal,
@@ -333,6 +335,7 @@ window.__ModuleLoader__.load({
         finally { if (generation.current === version) setBusy(false); }
       }
       React.useEffect(() => {
+        cancelClose();
         setData(null); setError(null); setOpen(false); setPosition(null); setBusy(false);
         if (provider) refresh();
         return () => { generation.current++; active.current?.abort(); };
@@ -351,7 +354,7 @@ window.__ModuleLoader__.load({
         const doc = typeof document === 'undefined' ? null : document;
         if (!open || !doc || !window.addEventListener) return;
         const close = () => setOpen(false);
-        const onKey = event => { if (event.key === 'Escape') { setOpen(false); trigger.current?.focus?.(); } };
+        const onKey = event => { if (event.key === 'Escape') { cancelClose(); setOpen(false); trigger.current?.focus?.(); } };
         const onPointer = event => { if (!event.target?.closest?.('.slq')) close(); };
         const onScroll = event => { if (!event.target?.closest?.('.slq-panel')) close(); };
         doc.addEventListener('keydown', onKey);
@@ -361,17 +364,29 @@ window.__ModuleLoader__.load({
         return () => { doc.removeEventListener('keydown', onKey); doc.removeEventListener('pointerdown', onPointer);
           window.removeEventListener('scroll', onScroll, true); window.removeEventListener('resize', close); };
       }, [open]);
-      function toggle() {
-        if (open) { setOpen(false); return; }
+      function cancelClose() {
+        if (closeTimer.current !== null) { clearTimeout(closeTimer.current); closeTimer.current = null; }
+      }
+      function scheduleClose() {
+        cancelClose();
+        closeTimer.current = setTimeout(() => { closeTimer.current = null; setOpen(false); }, 150);
+      }
+      React.useEffect(() => () => clearTimeout(closeTimer.current), []);
+      function openPanel() {
+        cancelClose();
         const rect = trigger.current?.getBoundingClientRect?.();
         const viewportWidth = typeof window.innerWidth === 'number' ? window.innerWidth : 0;
         const viewportHeight = typeof window.innerHeight === 'number' ? window.innerHeight : 0;
-        const width = viewportWidth ? Math.min(280, viewportWidth - 16) : 280;
+        const width = viewportWidth ? Math.min(300, viewportWidth - 16) : 300;
         setPosition(rect && viewportWidth && viewportHeight
           ? { width, left: Math.max(8, Math.min(rect.left, viewportWidth - width - 8)), bottom: viewportHeight - rect.top + 8 }
           : { width });
         setOpen(true);
-        refresh();
+        if (!busy) refresh();
+      }
+      function toggle() {
+        if (open) setOpen(false);
+        else openPanel();
       }
       if (!provider) return null;
       const quota = data && validQuota(data.quota, data.configured) ? data.quota : null;
@@ -388,10 +403,9 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'slq' },
         h('style', null, quotaStyles),
         h('button', { ref: trigger, type: 'button', className: 'slq-trigger', 'aria-haspopup': 'dialog', 'aria-expanded': open,
-          title, 'aria-label': title, onClick: toggle },
-          h('span', null, t('quotaShort')),
-          h('span', { className: `slq-value${percent ? '' : ' slq-muted'}` }, value)),
-        open && h('div', { className: 'slq-panel', role: 'dialog', 'aria-label': t('quota'), style: position ?? undefined },
+          title, 'aria-label': title, onClick: toggle, onMouseEnter: openPanel, onMouseLeave: scheduleClose }, quotaIcon),
+        open && h('div', { className: 'slq-panel', role: 'dialog', 'aria-label': t('quota'), style: position ?? undefined,
+          onMouseEnter: cancelClose, onMouseLeave: scheduleClose },
           h('div', { className: 'slq-head' }, h('strong', null, t('quota')),
             h('button', { type: 'button', className: 'slq-close', 'aria-label': t('close'), onClick: () => setOpen(false) }, '\u00d7')),
           error && h('p', { className: 'sl-error', role: 'alert' }, errorText(error)),
@@ -781,10 +795,12 @@ window.__ModuleLoader__.load({
               if (scope.sessions.subagentAddress(sessionId) === undefined) directory.load().catch(() => {});
             } };
           };
-          scope.slots.inject('conversation.input.right', () => {
-            scope.slots.register({ name: 'conversation.input.right', id: 'dk-subscriptions-speed', order: 90, inject }, Speed);
-            scope.slots.register({ name: 'conversation.input.right', id: 'dk-subscriptions-quota', order: 91, inject }, Quota);
-          });
+          scope.slots.inject('conversation.input.left', () => scope.slots.register({
+            name: 'conversation.input.left', id: 'dk-subscriptions-quota', order: 30, inject,
+          }, Quota));
+          scope.slots.inject('conversation.input.right', () => scope.slots.register({
+            name: 'conversation.input.right', id: 'dk-subscriptions-speed', order: 90, inject,
+          }, Speed));
         });
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section', id: 'subscriptions-lite', order: 55, label: () => t('title'),
