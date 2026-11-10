@@ -50,7 +50,7 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 
 ## 会话速度档位
 
-模型选择器旁仅显示当前速度档位，不显示额外的「Speed」标题。选择按会话、提供商、模型和凭证作用域保存；从下一模型步骤生效，重试保持该步骤的选择。用户选择档位后直接保存，不弹出二次确认；可能增加额度或费用的说明保留在档位提示中。不修改推理强度、不切换认证方式，不向工具的辅助模型请求继承速度选择。
+模型选择器旁仅显示当前速度档位，不显示额外的「Speed」标题。选择按会话、提供商、模型和凭证作用域保存，并记住每个模型最近一次的档位，供新会话继承（切换到其他模型、凭证作用域不同时不继承，显式选择正常速度会覆盖记忆）。从下一模型步骤生效，重试保持该步骤的选择。用户选择档位后直接保存，不弹出二次确认；可能增加额度或费用的说明保留在档位提示中。不修改推理强度、不切换认证方式，不向工具的辅助模型请求继承速度选择。
 
 - **Codex**：读取账号目录的 `service_tiers`，保留实际档位 ID、名称和说明；兼容旧 `additional_speed_tiers: ["fast"]` → `priority`。正常档位不发送 `service_tier`，不会自动应用目录中可能增加消耗的默认值。未知或下线档位不猜测替代。依据：[官方模型能力定义](https://github.com/openai/codex/blob/main/codex-rs/protocol/src/openai_models.rs)、[速度说明](https://developers.openai.com/codex/speed/)。
 - **Grok**：文本 Responses 模型提供正常／Priority，按[官方 Priority Processing 契约](https://docs.x.ai/developers/advanced-api-usage/priority-processing.md)发送 `service_tier: "priority"`，并按[官方接口定义](https://docs.x.ai/developers/rest-api-reference/inference/chat-completions.md)兼容 `fast` 别名，不重复提供两个档位。该参数不保证进入 Grok Build 的独立 Fast 部署；实际是否获批由服务端决定。OAuth 套餐权益和仅扣订阅额度仍未验证，档位提示保留此说明，不自动付费重试或回退。
@@ -60,7 +60,7 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 
 界面只消费解析结果，不按厂商名称排除模型；始终保留当前速度显示，没有其他档位时显示默认速度、禁用切换，不再隐藏整个控件。
 
-通用能力由 [speed.js](<speed.js>) 的模型／请求能力解析、会话选择和请求快照组成；[speed-host.js](<speed-host.js>) 使用宿主的独立 storageDomain sidecar 保存，不写入提示词或实验性会话事件。sidecar 不随会话导出或分叉自动复制，子会话从正常档位开始。更换凭证作用域不会继承高消耗选择。前端选择是所请求的档位，不代表服务端保证达到对应速度。
+通用能力由 [speed.js](<speed.js>) 的模型／请求能力解析、会话选择和请求快照组成；[speed-host.js](<speed-host.js>) 使用宿主的独立 storageDomain sidecar 保存，不写入提示词或实验性会话事件。sidecar 不随会话导出或分叉自动复制；缺少会话选择时沿用该模型最近一次选择，所以新会话与分叉会话默认沿用，切换到其他模型回到正常速度，显式选择正常速度会写回记忆。更换凭证作用域不会继承高消耗选择。前端选择是所请求的档位，不代表服务端保证达到对应速度。
 
 速度存储、请求快照引用和网络清理由 Cordis effect 生命周期管理，卸载时释放后才能重新加载，避免存储域仍被占用导致速度路由 404。插件加载会等待速度模块初始化，初始化错误不再被后台子模块静默吞掉。真实 Cordis／DomainFacility／Connection 的离线回归覆盖卸载后重新注册速度路由。
 
@@ -73,7 +73,7 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 - **Kimi**：`GET https://api.kimi.com/coding/v1/models`，遵循[官方 CLI 的模型发现接口](https://github.com/MoonshotAI/kimi-cli/blob/main/src/kimi_cli/auth/platforms.py)。名称、上下文、图像和思考档位读取远端声明，包括 K3.1 Pro 及高速版；只支持思考时不提供 off，默认档位同步到选择器和调用。只支持思考但没有声明任何可用档位的模型不声明思考控制（Harness 拒绝空档位列表，会连带隐藏整个厂商），按厂商默认行为思考。视频目前不声明为 Harness 输入能力。参见[模型说明](https://www.kimi.com/code/docs/kimi-code/models.html)。
 - **Grok**：用现有共享 OAuth 读取 `https://api.x.ai/v1/models`，与 `/v1/language-models` 按精确 ID 合并，排除生成图片/视频和不支持客户端 function tools 的 multi-agent。参考[模型接口](https://docs.x.ai/developers/rest-api-reference/inference/models.md)及[multi-agent 限制](https://docs.x.ai/developers/model-capabilities/text/multi-agent.md)。当前账号的两次 GET 已返回 200，但这只是远端 API 目录，`scope: vendor` **不代表逐模型订阅权限或仅扣订阅费用已验证**；不冒充 Grok Build 客户端，不切换到 CLI proxy 推理路由。
 - 设置页、各主会话独立路由、模型解析、prepared call 和测试共用远端名单。SDK 只提供传输契约及精确同 ID 的缺失元数据，不混入静态名称或自行扩展别名。未知模型缺少输出上限时采用本地 16,384 token 生成上限（不是服务端能力声明）；缺少上下文时保守采用 32,768。
-- 启动和授权成功后自动同步，列表/状态/调用在缓存过期后重查，显式刷新跳过缓存；没有后台轮询计时器。共享同步任务覆盖官方 OAuth 解析和目录请求，合计限时 10 秒，失败同样缓存 60 秒；缓存命中只在本地核对凭证指纹。单个调用方取消不伤共享请求；退出、凭证变化或卸载使旧结果失效。prepared call 保留已校验的元数据。
+- 启动预热（后台执行，不阻塞插件加载）和授权成功后自动同步，列表/状态/调用在缓存过期后重查，显式刷新跳过缓存；没有后台轮询计时器。共享同步任务覆盖官方 OAuth 解析和目录请求，合计限时 10 秒，失败同样缓存 60 秒；缓存命中只在本地核对凭证指纹。单个调用方取消不伤共享请求；退出、凭证变化或卸载使旧结果失效。prepared call 保留已校验的元数据。
 - 三厂统一复用官方加锁 OAuth 刷新，不回退 API key；固定可信端点、禁重定向、响应上限 1 MiB / 1,000 模型，忽略远端任意 URL/头/凭证字段。失败清空选择列表并显示脱敏错误，**不回退静态名单**。未注册同步源明确不可用。
 - 更新后需重新加载插件后台并刷新当前页面；若后台仍是旧版本，界面拒绝所有厂商的旧静态目录。仍有效的 OAuth 不必重新登录。真实验证只发送目录元数据，不执行会消耗推理额度的模型测试。
 

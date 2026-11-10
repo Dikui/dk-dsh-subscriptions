@@ -157,8 +157,9 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false }
   }, credentials: ctx.credentials, llm: ctx.llm, catalog, keyFor: recordKeyFor, accountModels,
     vendorTools: { kimiDatasource: kimiDatasourceStatus, grokXSearch: grokXSearchStatus } });
   // Startup warmup is a single lifetime-owned metadata operation, not a timer.
-  // Lists, status and calls perform subsequent TTL revalidation on demand.
-  await api.status(lifetime.signal);
+  // Deliberately not awaited: a slow catalog endpoint would otherwise delay the
+  // whole plugin load, and the picker refreshes when the catalog arrives.
+  void api.status(lifetime.signal).catch(() => {});
   ctx.connection.fetch.register({ path: '/api/subscriptions-lite', methods: ['GET', 'POST'],
     requestBody: 'buffered', fetch: createHttpHandler(api) });
   ctx.tools.register({

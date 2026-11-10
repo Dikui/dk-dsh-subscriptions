@@ -68,7 +68,10 @@ function canonicalTier(speed, value) {
 
 // One interface owns validation, durable per-session/model selection and request
 // snapshots. Storage is a host sidecar, never a prompt or an experimental log event.
-export function createSpeedSelections({ read, write, modelFor, sessionExists, validateSelection = () => {} }) {
+// readLast/writeLast remember the latest choice for the model it was made on, so
+// new sessions inherit it while switching models returns to Normal.
+export function createSpeedSelections({ read, write, readLast = () => undefined, writeLast = async () => {},
+  modelFor, sessionExists, validateSelection = () => {} }) {
   const pending = new Map(), steps = new Map();
   const key = (provider, model) => JSON.stringify([provider, model]);
   function check({ sessionId, provider, model }) {
@@ -78,15 +81,24 @@ export function createSpeedSelections({ read, write, modelFor, sessionExists, va
   function choiceFor({ sessionId, provider, model }) {
     return read(sessionId)?.choices?.find(choice => choice.provider === provider && choice.model === model);
   }
-  function selected(input, descriptor) {
+  function remembered(input, descriptor) {
+    const last = readLast(input.provider);
+    if (!last || last.model !== input.model) return undefined;
+    // Without a descriptor the account check is deferred to capture().
+    return descriptor && last.account !== descriptor.speedAccount ? undefined : last;
+  }
+  function selected(input, descriptor, speed) {
     const choice = choiceFor(input);
-    return choice?.account === descriptor?.speedAccount ? choice?.tier ?? 'default' : 'default';
+    if (choice) return choice.account === descriptor?.speedAccount ? choice.tier ?? 'default' : 'default';
+    const last = remembered(input, descriptor);
+    // A remembered tier only applies while the current model still offers it.
+    return last ? canonicalTier(speed, last.tier) ?? 'default' : 'default';
   }
   async function state(input, signal) {
     check(input);
     const model = await modelFor(input.provider, input.model, signal);
     if (!model) fail('UNKNOWN_MODEL');
-    const speed = modelSpeed(model), wanted = speed.tiers.length > 1 ? selected(input, model) : 'default';
+    const speed = modelSpeed(model), wanted = speed.tiers.length > 1 ? selected(input, model, speed) : 'default';
     const tier = canonicalTier(speed, wanted);
     return { sessionId: input.sessionId, provider: input.provider, model: input.model,
       source: speed.source, tiers: speed.tiers, selected: tier ?? 'default', stale: tier === undefined };
@@ -101,16 +113,19 @@ export function createSpeedSelections({ read, write, modelFor, sessionExists, va
       signal?.throwIfAborted();
       check(input);
       const choices = (read(input.sessionId)?.choices ?? []).filter(choice => key(choice.provider, choice.model) !== key(input.provider, input.model));
+      let account;
       if (tier !== 'default') {
         const descriptor = await modelFor(input.provider, input.model, signal);
         if (canonicalTier(modelSpeed(descriptor), input.tier) !== tier) fail('UNSUPPORTED_SPEED');
-        choices.push({ provider: input.provider, model: input.model, tier,
-          ...(descriptor.speedAccount ? { account: descriptor.speedAccount } : {}) });
+        account = descriptor.speedAccount;
       }
+      // An explicit Normal is stored too, so it overrides the remembered tier.
+      choices.push({ provider: input.provider, model: input.model, tier, ...(account ? { account } : {}) });
       if (choices.length > 1000) fail('SPEED_SELECTION_LIMIT');
       signal?.throwIfAborted();
       validateSelection(input);
       await write(input.sessionId, { choices });
+      await writeLast(input.provider, { model: input.model, tier, ...(account ? { account } : {}) });
     });
     pending.set(input.sessionId, operation);
     try { await operation; } finally { if (pending.get(input.sessionId) === operation) pending.delete(input.sessionId); }
@@ -122,9 +137,13 @@ export function createSpeedSelections({ read, write, modelFor, sessionExists, va
     // user changes Speed while the model is working. No selection leaks to tools.
     async beginStep(sessionId, selection, signal) {
       const input = { sessionId, provider: selection.provider, model: selection.model };
-      const step = { ...input, ...choiceFor(input) };
+      const choice = choiceFor(input), last = choice ? undefined : remembered(input);
+      // A remembered tier is snapshotted like an explicit choice; when metadata
+      // drops it before the request, capture falls back to Normal instead of failing.
+      const step = choice ? { ...input, ...choice }
+        : { ...input, remembered: true, tier: last?.tier ?? 'default', ...(last?.account ? { account: last.account } : {}) };
       steps.set(sessionId, step);
-      if (step.tier && step.tier !== 'default') {
+      if (step.tier !== 'default' && !step.remembered) {
         const descriptor = await modelFor(input.provider, input.model, signal);
         if (!descriptor) fail('UNKNOWN_MODEL');
         const speed = modelSpeed(descriptor);
@@ -142,11 +161,12 @@ export function createSpeedSelections({ read, write, modelFor, sessionExists, va
       if (speed.tiers.length < 2) return undefined; // No capability means an untouched default request.
       const step = steps.get(sessionId);
       const matches = step?.provider === provider && step.model === model.id;
-      const tier = matches
-        ? step.account === model.speedAccount ? step.tier ?? 'default' : 'default'
-        : selected({ sessionId, provider, model: model.id }, model);
+      const tier = !matches ? selected({ sessionId, provider, model: model.id }, model, speed)
+        : step.account === model.speedAccount ? step.tier ?? 'default' : 'default';
       // A step already owns a canonical id; aliases may only resolve unsnapshotted choices.
-      const canonical = matches ? speed.tiers.find(choice => choice.id === tier)?.id : canonicalTier(speed, tier);
+      const canonical = !matches ? canonicalTier(speed, tier)
+        : step.remembered ? canonicalTier(speed, tier) ?? 'default'
+        : speed.tiers.find(choice => choice.id === tier)?.id;
       if (canonical === undefined) fail('UNSUPPORTED_SPEED');
       // Both capability adapters describe request tiers, never replacement models.
       return canonical;

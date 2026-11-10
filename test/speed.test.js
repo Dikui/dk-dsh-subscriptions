@@ -247,3 +247,66 @@ test('a Speed change waits for the next step and never affects another session o
   assert.equal(speeds.capture({ ...input, conversation: true }, { ...model, id: 'other-model' }), 'default');
   assert.equal(speeds.capture(input, model), undefined, 'auxiliary requests do not inherit conversation Speed');
 });
+
+// small/spec — user request: new sessions remember the last Speed for that model.
+test('the last Speed chosen for a model is inherited by new sessions', async () => {
+  const model = await discover({ service_tiers: [{ id: 'priority', name: 'Fast' }] });
+  const records = new Map(), last = new Map();
+  const speeds = createSpeedSelections({ read: id => records.get(id), write: async (id, value) => records.set(id, value),
+    readLast: provider => last.get(provider), writeLast: async (provider, value) => last.set(provider, value),
+    modelFor: async () => model, sessionExists: () => true });
+  const input = { sessionId: 'session-a', provider: model.provider, model: model.id };
+  await speeds.select({ ...input, tier: 'priority', confirmed: true });
+  assert.equal(last.get(input.provider).model, model.id);
+  assert.equal(last.get(input.provider).tier, 'priority');
+  assert.equal((await speeds.state({ ...input, sessionId: 'session-b' })).selected, 'priority');
+  await speeds.beginStep('session-b', input);
+  assert.equal(speeds.capture({ ...input, sessionId: 'session-b', conversation: true }, model), 'priority',
+    'a new session sends the remembered tier without another choice');
+  await speeds.select({ ...input, sessionId: 'session-b', tier: 'default' });
+  assert.equal((await speeds.state({ ...input, sessionId: 'session-c' })).selected, 'default', 'Normal overrides the memory');
+});
+
+// small/spec — user decision: switching models returns to Normal, like reasoning effort.
+test('changing the model returns Speed to Normal', async () => {
+  const model = await discover({ service_tiers: [{ id: 'priority', name: 'Fast' }] });
+  const other = { ...model, id: 'another-model' };
+  const records = new Map(), last = new Map();
+  const speeds = createSpeedSelections({ read: id => records.get(id), write: async (id, value) => records.set(id, value),
+    readLast: provider => last.get(provider), writeLast: async (provider, value) => last.set(provider, value),
+    modelFor: async (provider, id) => id === other.id ? other : model, sessionExists: () => true });
+  const input = { sessionId: 'session-a', provider: model.provider, model: model.id };
+  await speeds.select({ ...input, tier: 'priority', confirmed: true });
+  const switched = { ...input, model: other.id };
+  assert.equal((await speeds.state(switched)).selected, 'default');
+  await speeds.beginStep('session-a', switched);
+  assert.equal(speeds.capture({ ...switched, conversation: true }, other), 'default',
+    'the remembered tier belongs to the model it was chosen on');
+});
+
+test('a remembered Speed does not cross subscription account scopes', async () => {
+  let model = { provider: 'subscription-another-vendor', id: 'ordinary-model',
+    speed: { tiers: [{ id: 'priority', name: 'Priority' }] }, speedAccount: 'account-a' };
+  const last = new Map();
+  const speeds = createSpeedSelections({ read: () => undefined, write: async () => {},
+    readLast: provider => last.get(provider), writeLast: async (provider, value) => last.set(provider, value),
+    modelFor: async () => model, sessionExists: () => true });
+  const input = { sessionId: 'session-a', provider: model.provider, model: model.id };
+  await speeds.select({ ...input, tier: 'priority', confirmed: true });
+  model = { ...model, speedAccount: 'account-b' };
+  assert.equal((await speeds.state({ ...input, sessionId: 'session-b' })).selected, 'default');
+});
+
+test('a remembered Speed removed from the next model falls back to Normal', async () => {
+  let model = { provider: 'subscription-another-vendor', id: 'ordinary-model', speed: { tiers: [{ id: 'priority', name: 'Priority' }] } };
+  const last = new Map();
+  const speeds = createSpeedSelections({ read: () => undefined, write: async () => {},
+    readLast: provider => last.get(provider), writeLast: async (provider, value) => last.set(provider, value),
+    modelFor: async () => model, sessionExists: () => true });
+  const input = { sessionId: 'session-a', provider: model.provider, model: model.id };
+  await speeds.select({ ...input, tier: 'priority', confirmed: true });
+  model = { ...model, speed: { tiers: [{ id: 'flex', name: 'Flex' }] } };
+  const next = { ...input, sessionId: 'session-b' };
+  await speeds.beginStep(next.sessionId, next);
+  assert.equal(speeds.capture({ ...next, conversation: true }, model), 'default');
+});
