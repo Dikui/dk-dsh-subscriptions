@@ -64,6 +64,26 @@ test('status and explicit HTTP quota refresh share metadata without hiding model
   } finally { f.api.dispose(); }
 });
 
+// small/spec — the composer badge needs one provider's quota, not the whole catalog.
+test('narrow quota state returns only provider, connectivity and quota without inference', async () => {
+  const f = fixture();
+  try {
+    assert.equal((await (await f.post('openai-codex', 'quota-state')).json()).configured, false);
+    f.setGrant('openai-codex'); f.setGrant('kimi-coding'); f.setGrant('xai');
+    const state = await (await f.post('openai-codex', 'quota-state')).json();
+    assert.equal(state.provider, 'openai-codex');
+    assert.equal(state.configured, true);
+    assert.equal(state.quota.windows[0].usedPercent, 25);
+    assert.deepEqual(Object.keys(state).sort(), ['configured', 'provider', 'quota']);
+    assert.doesNotMatch(JSON.stringify(state), /SECRET|ACCOUNT/);
+    assert.equal((await (await f.post('xai', 'quota-state')).json()).quota.state, 'unsupported');
+    assert.equal((await (await f.post('openai-codex', 'quota-state')).json()).quota.windows[0].usedPercent, 25,
+      'the 60-second cache keeps the badge read free of new metadata requests');
+    assert.equal(f.requests.length, 1, 'only the configured provider queried once; the cached badge read stays free');
+    assert.equal((await (await f.post('__proto__', 'quota-state')).json()).error, 'UNKNOWN_PROVIDER');
+  } finally { f.api.dispose(); }
+});
+
 test('login, logout, missing OAuth and dispose invalidate only the owning quota', async () => {
   const f = fixture();
   try {

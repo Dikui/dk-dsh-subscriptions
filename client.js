@@ -27,6 +27,7 @@ window.__ModuleLoader__.load({
         quotaUnsupported: 'No verified OAuth quota endpoint · quota unavailable', quotaPartial: 'Some quota details are unavailable',
         refreshQuota: 'Refresh quota · no inference request', refreshingQuota: 'Refreshing quota…',
         quotaRemaining: 'remaining', quotaResets: 'Resets', quotaUpdated: 'Updated', quotaStale: 'Stale · refresh to update', unknown: 'Unknown',
+        quotaShort: 'Quota', quotaNotConnected: 'Not connected', quotaUnsupportedShort: 'Unsupported', quotaUnavailableShort: 'Unavailable',
         quotaPrimary: 'Primary limit', quotaSecondary: 'Secondary limit', quota5h: '5-hour limit', quota7d: '7-day limit',
         quotaMonthTotal: 'Monthly total', quotaMonthCode: 'Monthly coding', quotaUsage: 'Usage limit', quotaWindow: 'Quota window',
         quotaHours: 'h', quotaDays: 'days', quotaMinutes: 'min', quotaSeconds: 's',
@@ -91,6 +92,7 @@ window.__ModuleLoader__.load({
         quotaUnsupported: '没有已验证的 OAuth 额度接口 · 额度不可用', quotaPartial: '部分额度信息不可用',
         refreshQuota: '刷新额度 · 不发送推理请求', refreshingQuota: '正在刷新额度…',
         quotaRemaining: '剩余', quotaResets: '重置', quotaUpdated: '更新于', quotaStale: '数据已过期 · 请刷新', unknown: '未知',
+        quotaShort: '额度', quotaNotConnected: '未连接', quotaUnsupportedShort: '不支持', quotaUnavailableShort: '不可用',
         quotaPrimary: '主要限额', quotaSecondary: '次要限额', quota5h: '5 小时限额', quota7d: '7 天限额',
         quotaMonthTotal: '每月总额度', quotaMonthCode: '每月编码额度', quotaUsage: '使用限额', quotaWindow: '额度窗口',
         quotaHours: '小时', quotaDays: '天', quotaMinutes: '分钟', quotaSeconds: '秒',
@@ -242,6 +244,161 @@ window.__ModuleLoader__.load({
         const t = ctx.locale.bind(namespace);
         const subscribe = listener => ctx.locale.subscribe(listener);
         const snapshot = () => ctx.locale.getSnapshot();
+    const errorText = code => t(errorKeys[code] || 'requestError');
+    const quotaNames = { primary: 'quotaPrimary', secondary: 'quotaSecondary', limit_5h: 'quota5h', limit_7d: 'quota7d',
+      limit_month_total: 'quotaMonthTotal', limit_month_code: 'quotaMonthCode', usage: 'quotaUsage' };
+    const quotaFixedPeriods = ['limit_5h', 'limit_7d', 'limit_month_total', 'limit_month_code'];
+    const chineseLocale = () => ((typeof snapshot() === 'string' ? snapshot() : snapshot()?.active) || '').startsWith('zh');
+    const quotaDate = (chinese, value) => value === null ? t('unknown') : new Date(value).toLocaleString(chinese ? 'zh-CN' : 'en-US');
+    function quotaPeriod(chinese, value) {
+      if (value === null) return '';
+      const [unit, divisor] = value % 86400 === 0 ? ['quotaDays', 86400] : value % 3600 === 0 ? ['quotaHours', 3600]
+        : value % 60 === 0 ? ['quotaMinutes', 60] : ['quotaSeconds', 1];
+      return `${value / divisor} ${t(unit)}`;
+    }
+    function quotaLowest(quota) {
+      const values = quota.windows.filter(window => window.usedPercent !== null).map(window => Math.round((100 - window.usedPercent) * 10) / 10);
+      return values.length ? Math.min(...values) : null;
+    }
+    // One renderer for both surfaces: settings card and composer popover.
+    function quotaBody({ quota, configured, busy, disabled, refresh }) {
+      const chinese = chineseLocale();
+      return h(React.Fragment, null,
+        quota.state === 'unsupported' && h('p', { className: 'sl-status', role: 'status' }, t('quotaUnsupported')),
+        ['unloaded', 'loading'].includes(quota.state) && h('p', { className: 'sl-status', role: 'status' },
+          t(quota.state === 'loading' ? 'quotaLoading' : configured ? 'quotaUnknown' : 'quotaUnloaded')),
+        quota.state === 'error' && h('p', { className: 'sl-error', role: 'alert' }, errorText(quota.error)),
+        quota.state === 'partial' && h('p', { className: 'sl-status', role: 'status' }, t('quotaPartial')),
+        quota.windows.map(window => {
+          const label = t(quotaNames[window.id] ?? 'quotaWindow');
+          const remaining = window.usedPercent === null ? t('unknown') : `${Math.round((100 - window.usedPercent) * 10) / 10}%`;
+          const period = quotaFixedPeriods.includes(window.id) ? '' : quotaPeriod(chinese, window.windowSeconds);
+          return h('div', { key: window.id, className: 'sl-quota-row' },
+            h('span', null, `${label}${period ? ` · ${period}` : ''} · ${chinese ? `${t('quotaRemaining')} ${remaining}` : `${remaining} ${t('quotaRemaining')}`}`),
+            window.usedPercent !== null && h('progress', { max: 100, value: 100 - window.usedPercent, 'aria-label': `${label} · ${t('quotaRemaining')}` }),
+            h('span', { className: 'sl-status' }, `${t('quotaResets')}: ${quotaDate(chinese, window.resetsAt)}`));
+        }),
+        quota.updatedAt != null && h('p', { className: 'sl-status', role: 'status' },
+          `${t('quotaUpdated')}: ${quotaDate(chinese, quota.updatedAt)}${quota.stale ? ` · ${t('quotaStale')}` : ''}`),
+        refresh && quota.state !== 'unsupported' && configured && h('button', { type: 'button', disabled: disabled || busy, onClick: refresh },
+          t(busy ? 'refreshingQuota' : 'refreshQuota')));
+    }
+    const quotaStyles = `
+      .slq{display:inline-flex;min-width:0;flex:none}
+      .slq-trigger{display:inline-flex;align-items:center;gap:4px;max-width:180px;height:28px;padding:0 8px;border:0;border-radius:var(--dsw-radius-sm,4px);background:transparent;color:var(--dsw-alias-label-caption);font:inherit;font-size:13px;font-weight:400;line-height:20px;white-space:nowrap;cursor:pointer}
+      .slq-trigger[aria-expanded=true],.slq-trigger:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}
+      .slq-trigger:focus-visible{outline:2px solid var(--dsw-focus-ring-color);outline-offset:2px}
+      .slq-value{font-variant-numeric:tabular-nums;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis}
+      .slq-muted{color:var(--dsw-alias-label-caption)}
+      @media(hover:hover){.slq-trigger:hover{background:var(--dsw-alias-interactive-bg-hover)}}
+      .slq-panel{position:fixed;z-index:1100;box-sizing:border-box;display:grid;gap:8px;max-height:min(320px,60vh);overflow-y:auto;padding:12px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg,12px);background:var(--dsw-specific-menu,var(--dsw-alias-bg-layer-1));box-shadow:var(--dsw-elevation-prominent,0 8px 24px #0003);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+      .slq-head{display:flex;align-items:center;gap:8px}.slq-head strong{color:var(--dsw-alias-label-primary);font-size:13px}
+      .slq-panel .sl-quota-row{display:grid;gap:3px}.slq-panel progress{width:100%;height:4px;accent-color:var(--dsw-alias-brand-primary)}
+      .slq-panel .sl-status{font-size:11px;color:var(--dsw-alias-label-caption)}.slq-panel .sl-error{color:var(--dsw-alias-state-error-primary)}
+      .slq-panel button{font:inherit;color:inherit;background:transparent;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:4px 8px;cursor:pointer}
+      .slq-panel button:disabled{opacity:.5;cursor:not-allowed}
+      .slq-close{margin-inline-start:auto;border:0;background:transparent;color:inherit;font:inherit;font-size:16px;line-height:16px;padding:2px 4px;cursor:pointer;border-radius:4px}
+      .slq-close:hover{background:var(--dsw-alias-interactive-bg-hover)}
+    `;
+    const quotaProviderByRoute = { 'subscription-openai-codex': 'openai-codex', 'subscription-kimi-coding': 'kimi-coding', 'subscription-xai': 'xai' };
+    function Quota({ directory, load }) {
+      React.useSyncExternalStore(subscribe, snapshot, snapshot);
+      const state = React.useSyncExternalStore(fn => directory.subscribe(fn), () => directory.getSnapshot());
+      const provider = quotaProviderByRoute[state.current?.provider];
+      const [data, setData] = React.useState(null);
+      const [error, setError] = React.useState(null);
+      const [open, setOpen] = React.useState(false);
+      const [position, setPosition] = React.useState(null);
+      const [busy, setBusy] = React.useState(false);
+      const generation = React.useRef(0), active = React.useRef(null), trigger = React.useRef(null);
+      React.useEffect(() => { load(); }, [load]);
+      async function send(action, signal) {
+        const response = await fetch('/api/subscriptions-lite', { method: 'POST', credentials: 'same-origin', cache: 'no-store', signal,
+          headers: { 'Content-Type': 'application/json', 'X-Subscriptions-Lite': '1' },
+          body: JSON.stringify({ action, provider }) });
+        const value = await response.json();
+        if (!response.ok || value?.error) throw new Error(typeof value?.error === 'string' ? value.error : 'REQUEST_FAILED');
+        if (value.provider !== provider || typeof value.configured !== 'boolean' || !value.quota
+          || !validQuota(value.quota, value.configured)) throw new Error('BAD_RESPONSE');
+        return value;
+      }
+      async function refresh(force = false) {
+        if (!provider) return;
+        const version = ++generation.current;
+        active.current?.abort();
+        const controller = new AbortController(); active.current = controller;
+        setError(null); setBusy(true);
+        try { const value = await send(force ? 'quota' : 'quota-state', controller.signal); if (generation.current === version) setData(value); }
+        catch (cause) { if (!controller.signal.aborted && generation.current === version) setError(cause.message); }
+        finally { if (generation.current === version) setBusy(false); }
+      }
+      React.useEffect(() => {
+        setData(null); setError(null); setOpen(false); setPosition(null); setBusy(false);
+        if (provider) refresh();
+        return () => { generation.current++; active.current?.abort(); };
+      }, [provider]);
+      const updatedAt = data?.quota?.updatedAt ?? null;
+      React.useEffect(() => {
+        const doc = typeof document === 'undefined' ? null : document;
+        if (!provider || updatedAt === null || !doc || !window.addEventListener) return;
+        const stale = () => Date.now() - updatedAt >= 60000;
+        const onFocus = () => { if (!doc.hidden && stale()) refresh(); };
+        window.addEventListener('focus', onFocus);
+        doc.addEventListener('visibilitychange', onFocus);
+        return () => { window.removeEventListener('focus', onFocus); doc.removeEventListener('visibilitychange', onFocus); };
+      }, [provider, updatedAt]);
+      React.useEffect(() => {
+        const doc = typeof document === 'undefined' ? null : document;
+        if (!open || !doc || !window.addEventListener) return;
+        const close = () => setOpen(false);
+        const onKey = event => { if (event.key === 'Escape') { setOpen(false); trigger.current?.focus?.(); } };
+        const onPointer = event => { if (!event.target?.closest?.('.slq')) close(); };
+        const onScroll = event => { if (!event.target?.closest?.('.slq-panel')) close(); };
+        doc.addEventListener('keydown', onKey);
+        doc.addEventListener('pointerdown', onPointer);
+        window.addEventListener('scroll', onScroll, true);
+        window.addEventListener('resize', close);
+        return () => { doc.removeEventListener('keydown', onKey); doc.removeEventListener('pointerdown', onPointer);
+          window.removeEventListener('scroll', onScroll, true); window.removeEventListener('resize', close); };
+      }, [open]);
+      function toggle() {
+        if (open) { setOpen(false); return; }
+        const rect = trigger.current?.getBoundingClientRect?.();
+        const viewportWidth = typeof window.innerWidth === 'number' ? window.innerWidth : 0;
+        const viewportHeight = typeof window.innerHeight === 'number' ? window.innerHeight : 0;
+        const width = viewportWidth ? Math.min(280, viewportWidth - 16) : 280;
+        setPosition(rect && viewportWidth && viewportHeight
+          ? { width, left: Math.max(8, Math.min(rect.left, viewportWidth - width - 8)), bottom: viewportHeight - rect.top + 8 }
+          : { width });
+        setOpen(true);
+        refresh();
+      }
+      if (!provider) return null;
+      const quota = data && validQuota(data.quota, data.configured) ? data.quota : null;
+      const chinese = chineseLocale();
+      const lowest = quota ? quotaLowest(quota) : null;
+      const percent = lowest === null ? null : `${Math.round(lowest * 10) / 10}%`;
+      const value = error || quota?.state === 'error' ? t('quotaUnavailableShort')
+        : data && !data.configured ? t('quotaNotConnected')
+        : !data || ['unloaded', 'loading'].includes(quota?.state) ? '\u2026'
+        : quota.state === 'unsupported' ? t('quotaUnsupportedShort')
+        : percent ?? t('quotaUnknown');
+      const title = percent ? `${t('quota')} · ${chinese ? `${t('quotaRemaining')} ${percent}` : `${percent} ${t('quotaRemaining')}`}`
+        : `${t('quota')} · ${value === '\u2026' ? t('quotaLoading') : value}`;
+      return h('div', { className: 'slq' },
+        h('style', null, quotaStyles),
+        h('button', { ref: trigger, type: 'button', className: 'slq-trigger', 'aria-haspopup': 'dialog', 'aria-expanded': open,
+          title, 'aria-label': title, onClick: toggle },
+          h('span', null, t('quotaShort')),
+          h('span', { className: `slq-value${percent ? '' : ' slq-muted'}` }, value)),
+        open && h('div', { className: 'slq-panel', role: 'dialog', 'aria-label': t('quota'), style: position ?? undefined },
+          h('div', { className: 'slq-head' }, h('strong', null, t('quota')),
+            h('button', { type: 'button', className: 'slq-close', 'aria-label': t('close'), onClick: () => setOpen(false) }, '\u00d7')),
+          error && h('p', { className: 'sl-error', role: 'alert' }, errorText(error)),
+          error && h('button', { type: 'button', disabled: busy, onClick: () => refresh(true) }, t(busy ? 'refreshingQuota' : 'refreshQuota')),
+          quota ? quotaBody({ quota, configured: data.configured, busy, disabled: busy, refresh: () => refresh(true) })
+            : !error && h('p', { className: 'sl-status', role: 'status' }, t('quotaLoading'))));
+    }
         function Prompt({ prompt, disabled, answer }) {
           const [value, setValue] = React.useState('');
           const inputId = React.useId();
@@ -516,41 +673,13 @@ window.__ModuleLoader__.load({
               if (control.current?.active()) setCopyStates(previous => ({ ...previous, [provider]: 'copyHelp' }));
             }
           }
-          const errorText = code => t(errorKeys[code] || 'requestError');
           function quotaView(provider, disabled, isRunning) {
             const quota = provider.quota === undefined ? null : validQuota(provider.quota, provider.configured) ? provider.quota : { state: 'error', error: 'QUOTA_INVALID', windows: [] };
-            const locale = snapshot();
-            const chinese = (typeof locale === 'string' ? locale : locale?.active)?.startsWith('zh');
-            const date = value => value === null ? t('unknown') : new Date(value).toLocaleString(chinese ? 'zh-CN' : 'en-US');
-            function duration(value) {
-              if (value === null) return '';
-              const [unit, divisor] = value % 86400 === 0 ? ['quotaDays', 86400] : value % 3600 === 0 ? ['quotaHours', 3600]
-                : value % 60 === 0 ? ['quotaMinutes', 60] : ['quotaSeconds', 1];
-              return `${value / divisor} ${t(unit)}`;
-            }
-            const names = { primary: 'quotaPrimary', secondary: 'quotaSecondary', limit_5h: 'quota5h', limit_7d: 'quota7d',
-              limit_month_total: 'quotaMonthTotal', limit_month_code: 'quotaMonthCode', usage: 'quotaUsage' };
             return h('section', { className: 'sl-quota', 'aria-label': t('quota') },
               h('strong', null, t('quota')),
               !quota ? h('p', { className: 'sl-status', role: 'status' }, t('quotaUnknown'))
-                : h(React.Fragment, null,
-                  quota.state === 'unsupported' && h('p', { className: 'sl-status', role: 'status' }, t('quotaUnsupported')),
-                  ['unloaded', 'loading'].includes(quota.state) && h('p', { className: 'sl-status', role: 'status' },
-                    t(quota.state === 'loading' ? 'quotaLoading' : provider.configured ? 'quotaUnknown' : 'quotaUnloaded')),
-                  quota.state === 'error' && h('p', { className: 'sl-error', role: 'alert' }, errorText(quota.error)),
-                  quota.state === 'partial' && h('p', { className: 'sl-status', role: 'status' }, t('quotaPartial')),
-                  quota.windows.map(window => {
-                    const label = t(names[window.id] ?? 'quotaWindow');
-                    const remaining = window.usedPercent === null ? t('unknown') : `${Math.round((100 - window.usedPercent) * 10) / 10}%`;
-                    const period = ['limit_5h', 'limit_7d', 'limit_month_total', 'limit_month_code'].includes(window.id) ? '' : duration(window.windowSeconds);
-                    return h('div', { key: window.id, className: 'sl-quota-row' },
-                      h('span', null, `${label}${period ? ` · ${period}` : ''} · ${chinese ? `${t('quotaRemaining')} ${remaining}` : `${remaining} ${t('quotaRemaining')}`}`),
-                      window.usedPercent !== null && h('progress', { max: 100, value: 100 - window.usedPercent, 'aria-label': `${label} · ${t('quotaRemaining')}` }),
-                      h('span', { className: 'sl-status' }, `${t('quotaResets')}: ${date(window.resetsAt)}`));
-                  }),
-                  quota.updatedAt != null && h('p', { className: 'sl-status', role: 'status' }, `${t('quotaUpdated')}: ${date(quota.updatedAt)}${quota.stale ? ` · ${t('quotaStale')}` : ''}`),
-                  quota.state !== 'unsupported' && provider.configured && h('button', { type: 'button', disabled: disabled || isRunning,
-                    onClick: () => run(provider.id, 'quota') }, t(busy[provider.id] === 'quota' ? 'refreshingQuota' : 'refreshQuota'))));
+                : quotaBody({ quota, configured: provider.configured, busy: busy[provider.id] === 'quota',
+                  disabled: disabled || isRunning, refresh: () => run(provider.id, 'quota') }));
           }
           const link = (url, label) => h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', referrerPolicy: 'no-referrer' }, label);
           return h('section', { className: 'subscriptions-lite', 'aria-label': t('title') },
@@ -646,15 +775,16 @@ window.__ModuleLoader__.load({
             })));
         }
         ctx.inject?.(['modelDirectories', 'sessions'], scope => {
-          scope.slots.inject('conversation.input.right', () => scope.slots.register({
-            name: 'conversation.input.right', id: 'dk-subscriptions-speed', order: 90,
-            inject: sessionId => {
-              const directory = scope.modelDirectories.directoryFor(sessionId);
-              return { sessionId, directory: directory.store, load: () => {
-                if (scope.sessions.subagentAddress(sessionId) === undefined) directory.load().catch(() => {});
-              } };
-            },
-          }, Speed));
+          const inject = sessionId => {
+            const directory = scope.modelDirectories.directoryFor(sessionId);
+            return { sessionId, directory: directory.store, load: () => {
+              if (scope.sessions.subagentAddress(sessionId) === undefined) directory.load().catch(() => {});
+            } };
+          };
+          scope.slots.inject('conversation.input.right', () => {
+            scope.slots.register({ name: 'conversation.input.right', id: 'dk-subscriptions-speed', order: 90, inject }, Speed);
+            scope.slots.register({ name: 'conversation.input.right', id: 'dk-subscriptions-quota', order: 91, inject }, Quota);
+          });
         });
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section', id: 'subscriptions-lite', order: 55, label: () => t('title'),

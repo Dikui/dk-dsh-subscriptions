@@ -167,6 +167,12 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     if (attempts.get(id)?.state === 'running' || loggingOut.has(id)) quota.clear();
     return quota.status();
   }
+  // Narrow read for the composer badge: no catalog, auth attempt or account identity.
+  async function quotaState(id, signal) {
+    provider(id);
+    const configured = !!oauthRecord(await credentials.readRecord(keyFor(id)));
+    return { provider: id, configured, quota: await quotaStatus(id, signal) };
+  }
   async function refreshQuota(id, signal) {
     provider(id);
     if (disposed) fail('UNAVAILABLE');
@@ -321,7 +327,7 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     for (const models of accountModels.values()) models?.clear();
     for (const quota of accountQuotas.values()) quota?.clear();
   }
-  return { status, login, answer, cancel, logout, test, refreshModels, refreshQuota, dispose };
+  return { status, login, answer, cancel, logout, test, refreshModels, refreshQuota, quotaState, dispose };
 }
 
 // Connection authenticates and validates the original HTTP authority before
@@ -361,6 +367,7 @@ export function createHttpHandler(api) {
         case 'test': return json(await api.test(provider, model, request.signal));
         case 'models': return json(await api.refreshModels(provider, request.signal));
         case 'quota': return json(await api.refreshQuota(provider, request.signal));
+        case 'quota-state': return json(await api.quotaState(provider, request.signal));
         case 'speed-state': return json(await api.speedState(body, request.signal));
         case 'speed-select': return json(await api.speedSelect(body, request.signal));
         default: fail('INVALID_ACTION');
