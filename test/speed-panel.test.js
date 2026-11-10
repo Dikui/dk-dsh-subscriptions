@@ -26,6 +26,28 @@ function fixture() {
   };
 }
 
+// small/regression — reopening a session can render Speed before the model directory is loaded.
+test('Speed becomes selectable after an initially unresolved model loads', async () => {
+  const server = fixture(), pending = Promise.withResolvers();
+  server.setModel(undefined, undefined);
+  const panel = await panelHarness({ ...server, fetch: async (path, options) => {
+    await pending.promise;
+    return server.fetch(path, options);
+  } });
+  try {
+    assert.equal(panel.tree, null, 'wait for a subscription model without crashing');
+    assert.equal(server.calls.length, 0, 'do not request Speed before the model is known');
+    server.setModel('subscription-openai-codex', 'tiered-model'); await panel.rerender();
+    assert.equal(panel.text(panel.nodes().find(node => node.props.role === 'status')), 'Loading speed…');
+    pending.resolve(); await panel.flush();
+    const select = panel.nodes().find(node => node.type === 'select');
+    assert.ok(select, 'Speed remains available after the model directory resolves');
+    assert.deepEqual(select.props.children.map(node => panel.text(node)), ['Normal', 'Fast', 'Ultrafast']);
+    assert.equal(select.props.value, 'default');
+    assert.equal(select.props.disabled, false);
+  } finally { pending.resolve(); panel.dispose(); }
+});
+
 test('selecting Fast or Ultrafast saves directly without a confirmation popup', async () => {
   for (const language of ['en', 'zh']) {
     for (const tier of ['priority', 'ultrafast']) {

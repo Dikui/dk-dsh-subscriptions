@@ -256,7 +256,7 @@ window.__ModuleLoader__.load({
             if (supported) refresh();
             return () => { generation.current++; active.current?.abort(); };
           }, [sessionId, provider, model, state.groups]);
-          const currentSpeed = speed?.provider === provider && speed.model === model ? speed : null;
+          const currentSpeed = speed && speed.provider === provider && speed.model === model ? speed : null;
           if (!supported) return null;
           const label = tier => tier.id === 'default' && tier.name === 'Normal' ? t('speedNormal') : tier.name;
           async function choose(tier) {
