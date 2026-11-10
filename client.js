@@ -295,8 +295,6 @@ window.__ModuleLoader__.load({
       .slq-panel .sl-status{font-size:11px;color:var(--dsw-alias-label-caption)}.slq-panel .sl-error{color:var(--dsw-alias-state-error-primary)}
       .slq-panel button{font:inherit;color:inherit;background:transparent;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:4px 8px;cursor:pointer}
       .slq-panel button:disabled{opacity:.5;cursor:not-allowed}
-      .slq-close{margin-inline-start:auto;border:0;background:transparent;color:inherit;font:inherit;font-size:16px;line-height:16px;padding:2px 4px;cursor:pointer;border-radius:4px}
-      .slq-close:hover{background:var(--dsw-alias-interactive-bg-hover)}
       .slq-section{display:grid;gap:6px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l1)}
       .slq-provider{color:var(--dsw-alias-label-primary);font-size:12px;font-weight:600}
     `;
@@ -398,8 +396,7 @@ window.__ModuleLoader__.load({
           title, 'aria-label': title, onClick: toggle, onMouseEnter: openPanel, onMouseLeave: scheduleClose }, quotaIcon),
         open && h('div', { className: 'slq-panel', role: 'dialog', 'aria-label': t('quota'), style: position ?? undefined,
           onMouseEnter: cancelClose, onMouseLeave: scheduleClose },
-          h('div', { className: 'slq-head' }, h('strong', null, t('quota')),
-            h('button', { type: 'button', className: 'slq-close', 'aria-label': t('close'), onClick: () => setOpen(false) }, '\u00d7')),
+          h('div', { className: 'slq-head' }, h('strong', null, t('quota'))),
           items === null
             ? h('p', { className: 'sl-status', role: 'status' }, t('quotaLoading'))
             : h(React.Fragment, null,
