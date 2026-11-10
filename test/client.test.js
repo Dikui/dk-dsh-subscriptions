@@ -22,7 +22,7 @@ function loadClient() {
   const plugin = declaration.factory(name => { assert.equal(name, 'react'); return { createElement() {} }; });
   return { declaration, plugin, helpers: sandbox.__test };
 }
-test('client module registers only its settings slot and disposes translations', () => {
+test('client module registers its settings and sidebar slots and disposes translations', () => {
   const { declaration, plugin } = loadClient();
   assert.equal(declaration.id, 'dk-subscriptions');
   const dictionaries = new Map(), cleanup = [];
@@ -31,7 +31,7 @@ test('client module registers only its settings slot and disposes translations',
     effect(fn) { cleanup.push(fn()); },
     locale: { register(ns, language, values) { assert.equal(ns, 'dk-subscriptions'); dictionaries.set(language, values); return () => dictionaries.delete(language); },
       bind() { return key => dictionaries.get('en')[key]; }, subscribe() {}, getSnapshot() {} },
-    slots: { inject(name, fn) { assert.equal(name, 'settings.section'); fn(); }, register(options, component) { slot = options; assert.equal(typeof component, 'function'); } },
+    slots: { inject(name, fn) { assert.ok(['sidebar.footer.action', 'settings.section'].includes(name)); fn(); }, register(options, component) { if (options.name === 'settings.section') slot = options; assert.equal(typeof component, 'function'); } },
   });
   assert.equal(slot.id, 'subscriptions-lite'); assert.equal(slot.label(), 'dk-subscriptions');
   assert.equal(dictionaries.size, 2); cleanup.forEach(fn => fn()); assert.equal(dictionaries.size, 0);

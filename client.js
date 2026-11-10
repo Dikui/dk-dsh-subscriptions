@@ -289,7 +289,7 @@ window.__ModuleLoader__.load({
       .slq-trigger[aria-expanded=true],.slq-trigger:focus-visible{background:var(--dsw-alias-interactive-bg-hover)}
       .slq-trigger:focus-visible{outline:2px solid var(--dsw-focus-ring-color);outline-offset:2px}
       @media(hover:hover){.slq-trigger:hover{background:var(--dsw-alias-interactive-bg-hover)}}
-      .slq-panel{position:fixed;z-index:1100;box-sizing:border-box;display:grid;gap:8px;max-height:min(320px,60vh);overflow-y:auto;padding:12px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg,12px);background:var(--dsw-specific-menu,var(--dsw-alias-bg-layer-1));box-shadow:var(--dsw-elevation-prominent,0 8px 24px #0003);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+      .slq-panel{position:fixed;z-index:1100;box-sizing:border-box;display:grid;gap:8px;max-height:min(480px,calc(100vh - 72px));overflow-y:auto;padding:12px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg,12px);background:var(--dsw-specific-menu,var(--dsw-alias-bg-layer-1));box-shadow:var(--dsw-elevation-prominent,0 8px 24px #0003);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
       .slq-head{display:flex;align-items:center;gap:8px}.slq-head strong{color:var(--dsw-alias-label-primary);font-size:13px}
       .slq-panel .sl-quota-row{display:grid;gap:3px}.slq-panel progress{width:100%;height:4px;accent-color:var(--dsw-alias-brand-primary)}
       .slq-panel .sl-status{font-size:11px;color:var(--dsw-alias-label-caption)}.slq-panel .sl-error{color:var(--dsw-alias-state-error-primary)}
@@ -297,64 +297,56 @@ window.__ModuleLoader__.load({
       .slq-panel button:disabled{opacity:.5;cursor:not-allowed}
       .slq-close{margin-inline-start:auto;border:0;background:transparent;color:inherit;font:inherit;font-size:16px;line-height:16px;padding:2px 4px;cursor:pointer;border-radius:4px}
       .slq-close:hover{background:var(--dsw-alias-interactive-bg-hover)}
+      .slq-section{display:grid;gap:6px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l1)}
+      .slq-provider{color:var(--dsw-alias-label-primary);font-size:12px;font-weight:600}
     `;
-    const quotaProviderByRoute = { 'subscription-openai-codex': 'openai-codex', 'subscription-kimi-coding': 'kimi-coding', 'subscription-xai': 'xai' };
+    const quotaProviderNames = { 'openai-codex': 'OpenAI · ChatGPT', 'kimi-coding': 'Kimi Code', xai: 'Grok' };
+    const quotaProviders = ['openai-codex', 'kimi-coding', 'xai'];
     const quotaIcon = h('svg', { viewBox: '0 0 16 16', width: 15, height: 15, 'aria-hidden': true, focusable: false },
       h('path', { d: 'M2.8 12.2a5.2 5.2 0 0 1 10.4 0', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4, 'stroke-linecap': 'round' }),
       h('path', { d: 'M8 12.2 10.5 8.4', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4, 'stroke-linecap': 'round' }),
       h('circle', { cx: 8, cy: 12.2, r: 1.1, fill: 'currentColor' }));
-    function Quota({ directory, load }) {
+    // Sidebar footer gauge: every subscription account, refreshed when hovered.
+    function SidebarQuota() {
       React.useSyncExternalStore(subscribe, snapshot, snapshot);
-      const state = React.useSyncExternalStore(fn => directory.subscribe(fn), () => directory.getSnapshot());
-      const provider = quotaProviderByRoute[state.current?.provider];
-      const [data, setData] = React.useState(null);
-      const [error, setError] = React.useState(null);
+      const [items, setItems] = React.useState(null);
       const [open, setOpen] = React.useState(false);
       const [position, setPosition] = React.useState(null);
       const [busy, setBusy] = React.useState(false);
       const generation = React.useRef(0), active = React.useRef(null), trigger = React.useRef(null), closeTimer = React.useRef(null);
-      React.useEffect(() => { load(); }, [load]);
-      async function send(action, signal) {
+      async function send(id, force, signal) {
         const response = await fetch('/api/subscriptions-lite', { method: 'POST', credentials: 'same-origin', cache: 'no-store', signal,
           headers: { 'Content-Type': 'application/json', 'X-Subscriptions-Lite': '1' },
-          body: JSON.stringify({ action, provider }) });
+          body: JSON.stringify({ action: force ? 'quota' : 'quota-state', provider: id }) });
         const value = await response.json();
         if (!response.ok || value?.error) throw new Error(typeof value?.error === 'string' ? value.error : 'REQUEST_FAILED');
-        if (value.provider !== provider || typeof value.configured !== 'boolean' || !value.quota
+        if (value.provider !== id || typeof value.configured !== 'boolean' || !value.quota
           || !validQuota(value.quota, value.configured)) throw new Error('BAD_RESPONSE');
         return value;
       }
       async function refresh(force = false) {
-        if (!provider) return;
         const version = ++generation.current;
         active.current?.abort();
         const controller = new AbortController(); active.current = controller;
-        setError(null); setBusy(true);
-        try { const value = await send(force ? 'quota' : 'quota-state', controller.signal); if (generation.current === version) setData(value); }
-        catch (cause) { if (!controller.signal.aborted && generation.current === version) setError(cause.message); }
-        finally { if (generation.current === version) setBusy(false); }
+        const known = new Map((items ?? []).map(item => [item.id, Boolean(item.configured)]));
+        setBusy(true);
+        const results = await Promise.all(quotaProviders.map(async id => {
+          try { const value = await send(id, force && known.get(id) === true, controller.signal); return { id, ...value }; }
+          catch (cause) { return { id, error: controller.signal.aborted ? 'ABORTED' : cause.message }; }
+        }));
+        if (generation.current !== version) return;
+        setBusy(false);
+        setItems(results);
       }
       React.useEffect(() => {
-        cancelClose();
-        setData(null); setError(null); setOpen(false); setPosition(null); setBusy(false);
-        if (provider) refresh();
+        refresh();
         return () => { generation.current++; active.current?.abort(); };
-      }, [provider]);
-      const updatedAt = data?.quota?.updatedAt ?? null;
-      React.useEffect(() => {
-        const doc = typeof document === 'undefined' ? null : document;
-        if (!provider || updatedAt === null || !doc || !window.addEventListener) return;
-        const stale = () => Date.now() - updatedAt >= 60000;
-        const onFocus = () => { if (!doc.hidden && stale()) refresh(); };
-        window.addEventListener('focus', onFocus);
-        doc.addEventListener('visibilitychange', onFocus);
-        return () => { window.removeEventListener('focus', onFocus); doc.removeEventListener('visibilitychange', onFocus); };
-      }, [provider, updatedAt]);
+      }, []);
       React.useEffect(() => {
         const doc = typeof document === 'undefined' ? null : document;
         if (!open || !doc || !window.addEventListener) return;
         const close = () => setOpen(false);
-        const onKey = event => { if (event.key === 'Escape') { cancelClose(); setOpen(false); trigger.current?.focus?.(); } };
+        const onKey = event => { if (event.key === 'Escape') { cancelClose(); close(); trigger.current?.focus?.(); } };
         const onPointer = event => { if (!event.target?.closest?.('.slq')) close(); };
         const onScroll = event => { if (!event.target?.closest?.('.slq-panel')) close(); };
         doc.addEventListener('keydown', onKey);
@@ -388,15 +380,15 @@ window.__ModuleLoader__.load({
         if (open) setOpen(false);
         else openPanel();
       }
-      if (!provider) return null;
-      const quota = data && validQuota(data.quota, data.configured) ? data.quota : null;
       const chinese = chineseLocale();
-      const lowest = quota ? quotaLowest(quota) : null;
-      const percent = lowest === null ? null : `${Math.round(lowest * 10) / 10}%`;
-      const value = error || quota?.state === 'error' ? t('quotaUnavailableShort')
-        : data && !data.configured ? t('quotaNotConnected')
-        : !data || ['unloaded', 'loading'].includes(quota?.state) ? '\u2026'
-        : quota.state === 'unsupported' ? t('quotaUnsupportedShort')
+      const list = items ?? [];
+      const configured = list.filter(item => item.configured && item.quota);
+      const lowests = configured.map(item => quotaLowest(item.quota)).filter(value => value !== null);
+      const percent = lowests.length ? `${Math.round(Math.min(...lowests) * 10) / 10}%` : null;
+      const failed = items !== null && list.length > 0 && list.every(item => item.error);
+      const value = failed ? t('quotaUnavailableShort')
+        : items === null ? '\u2026'
+        : !configured.length ? t('quotaNotConnected')
         : percent ?? t('quotaUnknown');
       const title = percent ? `${t('quota')} · ${chinese ? `${t('quotaRemaining')} ${percent}` : `${percent} ${t('quotaRemaining')}`}`
         : `${t('quota')} · ${value === '\u2026' ? t('quotaLoading') : value}`;
@@ -408,10 +400,16 @@ window.__ModuleLoader__.load({
           onMouseEnter: cancelClose, onMouseLeave: scheduleClose },
           h('div', { className: 'slq-head' }, h('strong', null, t('quota')),
             h('button', { type: 'button', className: 'slq-close', 'aria-label': t('close'), onClick: () => setOpen(false) }, '\u00d7')),
-          error && h('p', { className: 'sl-error', role: 'alert' }, errorText(error)),
-          error && h('button', { type: 'button', disabled: busy, onClick: () => refresh(true) }, t(busy ? 'refreshingQuota' : 'refreshQuota')),
-          quota ? quotaBody({ quota, configured: data.configured, busy, disabled: busy, refresh: () => refresh(true) })
-            : !error && h('p', { className: 'sl-status', role: 'status' }, t('quotaLoading'))));
+          items === null
+            ? h('p', { className: 'sl-status', role: 'status' }, t('quotaLoading'))
+            : h(React.Fragment, null,
+              list.map(item => h('div', { key: item.id, className: 'slq-section' },
+                h('div', { className: 'slq-provider' }, quotaProviderNames[item.id]),
+                item.error ? h('p', { className: 'sl-error', role: 'alert' }, errorText(item.error))
+                  : item.configured ? quotaBody({ quota: item.quota, configured: true, busy, disabled: busy })
+                  : h('p', { className: 'sl-status', role: 'status' }, t('quotaNotConnected')))),
+              h('button', { type: 'button', disabled: busy || !configured.length, onClick: () => refresh(true) },
+                t(busy ? 'refreshingQuota' : 'refreshQuota')))));
     }
         function Prompt({ prompt, disabled, answer }) {
           const [value, setValue] = React.useState('');
@@ -795,13 +793,13 @@ window.__ModuleLoader__.load({
               if (scope.sessions.subagentAddress(sessionId) === undefined) directory.load().catch(() => {});
             } };
           };
-          scope.slots.inject('conversation.input.left', () => scope.slots.register({
-            name: 'conversation.input.left', id: 'dk-subscriptions-quota', order: 30, inject,
-          }, Quota));
           scope.slots.inject('conversation.input.right', () => scope.slots.register({
             name: 'conversation.input.right', id: 'dk-subscriptions-speed', order: 90, inject,
           }, Speed));
         });
+        ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
+          name: 'sidebar.footer.action', id: 'dk-subscriptions-quota', order: 20,
+        }, SidebarQuota));
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section', id: 'subscriptions-lite', order: 55, label: () => t('title'),
         }, Panel));
