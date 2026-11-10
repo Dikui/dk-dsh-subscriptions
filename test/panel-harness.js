@@ -5,7 +5,7 @@ import vm from 'node:vm';
 // Exercise the shipped Panel's event handlers and effects without a second
 // React installation. This is a deterministic hook harness, not a browser or
 // an assertion about browser popup policy / native shell behavior.
-export async function panelHarness({ fetch, open = () => null, clipboard, confirm = () => true, language = 'en', prompt, answer, speed }) {
+export async function panelHarness({ fetch, open = () => null, clipboard, confirm = () => true, language = 'en', localeSnapshot, prompt, answer, speed }) {
   let declaration, Panel, Prompt, Speed, cursor = 0, pendingRender = false, effects = [], tree;
   const cells = [], cleanups = [], timers = new Map(), dictionaries = new Map();
   let timerId = 0;
@@ -48,7 +48,7 @@ export async function panelHarness({ fetch, open = () => null, clipboard, confir
     locale: {
       register(ns, locale, values) { dictionaries.set(locale, values); return () => dictionaries.delete(locale); },
       bind() { return key => dictionaries.get(language)?.[key] ?? key; },
-      subscribe() { return () => {}; }, getSnapshot() { return language; },
+      subscribe() { return () => {}; }, getSnapshot() { return localeSnapshot ?? { active: language, revision: 1 }; },
     },
     slots: { inject(name, callback) { callback(); }, register(options, component) { Panel = component; } },
   });

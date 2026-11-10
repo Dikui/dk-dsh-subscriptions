@@ -134,6 +134,13 @@ test('registered subscription routes use the same remote catalogs and native OAu
       assert.deepEqual([...routes].sort(), vendors.map(vendor => vendor.route).sort()); adapter = value;
     }, emitAdaptersUpdated() {}, stream: request => adapter.stream({ ...request,
       apiKey: 'SYNTHETIC-CALLER-PAID', headers: { authorization: 'Bearer SYNTHETIC-CALLER-PAID' } }) };
+    for (const id of ids.filter(id => id !== 'xai')) {
+      const access = accessFor(id, expired ? '-ROTATED' : '');
+      const [origin, path] = id === 'openai-codex' ? ['https://chatgpt.com', '/backend-api/wham/usage'] : ['https://api.kimi.com', '/coding/v1/usages'];
+      agent.get(origin).intercept({ method: 'GET', path, headers: { authorization: `Bearer ${access}` } }).reply(200,
+        id === 'openai-codex' ? { rate_limit: { primary_window: { used_percent: 25, limit_window_seconds: 18000, reset_at: 1800000000 } } }
+          : { usages: { limit_5h: { used_ratio: '0.4', reset_time: '2027-01-15T08:00:00Z' } } });
+    }
     const { apply } = await import('../index.js');
     await apply({ credentials,
       effect(callback) { const cleanup = callback(); if (cleanup) dispose.push(cleanup); },
@@ -169,8 +176,8 @@ test('registered subscription routes use the same remote catalogs and native OAu
       runtime = await mount({ ids: vendors.map(vendor => vendor.id) });
       assert.deepEqual([...runtime.tools.keys()].sort(), ['grok_x_search', 'kimi_call_data_source_tool', 'kimi_get_data_source_desc', 'subscription_accounts']);
       assert.deepEqual(calls().map(([method, origin, path]) => [method, origin, path.split('?')[0]]).sort(), [
-        ['GET', 'https://chatgpt.com', '/backend-api/codex/models'],
-        ['GET', 'https://api.kimi.com', '/coding/v1/models'],
+        ['GET', 'https://chatgpt.com', '/backend-api/codex/models'], ['GET', 'https://chatgpt.com', '/backend-api/wham/usage'],
+        ['GET', 'https://api.kimi.com', '/coding/v1/models'], ['GET', 'https://api.kimi.com', '/coding/v1/usages'],
         ['GET', 'https://api.x.ai', '/v1/models'], ['GET', 'https://api.x.ai', '/v1/language-models'],
       ].sort());
       assert.deepEqual(inferenceCalls(), []);
@@ -189,6 +196,8 @@ test('registered subscription routes use the same remote catalogs and native OAu
         assert.equal(state.modelCatalog.source, 'account');
         assert.equal(state.modelCatalog.scope, vendor.id === 'xai' ? 'vendor' : 'account');
         assert.equal(state.modelCatalog.state, 'ready'); assert.equal(state.modelCatalog.error, null);
+        assert.equal(state.quota.state, vendor.id === 'xai' ? 'unsupported' : 'ready');
+        if (vendor.id !== 'xai') assert.equal(state.quota.windows[0].usedPercent, vendor.id === 'openai-codex' ? 25 : 40);
         assert.deepEqual(state.models.map(item => item.id), expected[index]);
         assert.deepEqual(settings.providers.find(item => item.id === vendor.id).models, state.models);
         const list = await runtime.adapter.listModels(vendor.route);
@@ -205,6 +214,21 @@ test('registered subscription routes use the same remote catalogs and native OAu
       }
       assert.doesNotMatch(JSON.stringify({ status, settings }), /SYNTHETIC-|REMOTE-PAID|untrusted\.invalid/);
       assert.equal(calls().length, before, 'metadata is cached for 60 seconds, including settings/status reads');
+    });
+    await t.test('explicit quota tool and HTTP refresh use native OAuth metadata only', async () => {
+      agent.clearCallHistory();
+      for (const [id, origin, path] of [['openai-codex', 'https://chatgpt.com', '/backend-api/wham/usage'],
+        ['kimi-coding', 'https://api.kimi.com', '/coding/v1/usages']]) {
+        agent.get(origin).intercept({ method: 'GET', path, headers: { authorization: `Bearer ${accessFor(id)}` } })
+          .reply(200, id === 'openai-codex' ? { rate_limit: { primary_window: { used_percent: 50 } } } : { usages: { limit_5h: { used_ratio: 0.75 } } });
+      }
+      assert.deepEqual(await runtime.tool.execute({ action: 'quota', provider: 'openai-codex' }, exec), { ok: true });
+      const response = await runtime.settingsFetch(new Request('http://dsh.internal/api/subscriptions-lite', { method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-subscriptions-lite': '1' }, body: JSON.stringify({ action: 'quota', provider: 'kimi-coding' }) }));
+      assert.deepEqual(await response.json(), { ok: true });
+      assert.equal((await runtime.tool.execute({ action: 'quota', provider: 'xai' }, exec)).error, 'QUOTA_UNSUPPORTED');
+      assert.equal(calls().length, 2); assert.deepEqual(inferenceCalls(), []);
+      agent.assertNoPendingInterceptors();
     });
     await t.test('K3.1 exposes remote high defaults and low/high/max only in both resolve and prepare', async () => {
       for (const model of ['k3.1-pro', 'k3.1-pro-highspeed']) {
@@ -402,7 +426,7 @@ test('registered subscription routes use the same remote catalogs and native OAu
       const settings = await enabled.settingsFetch(new Request('http://dsh.internal/api/subscriptions-lite'));
       assert.equal(settings.status, 200);
       assert.deepEqual((await settings.json()).vendorTools, state.vendorTools);
-      assert.deepEqual(calls(), [['GET', 'https://api.kimi.com', '/coding/v1/models']]);
+      assert.deepEqual(calls(), [['GET', 'https://api.kimi.com', '/coding/v1/models'], ['GET', 'https://api.kimi.com', '/coding/v1/usages']]);
       let requestBody;
       agent.get('https://api.kimi.com').intercept({ method: 'POST', path: '/coding/v1/tools',
         headers: { authorization: `Bearer ${accessFor('kimi-coding')}` } }).reply(200, async ({ body }) => {
