@@ -33,7 +33,7 @@ test('client module registers its settings and sidebar slots and disposes transl
       bind() { return key => dictionaries.get('en')[key]; }, subscribe() {}, getSnapshot() {} },
     slots: { inject(name, fn) { assert.ok(['sidebar.footer.action', 'settings.section'].includes(name)); fn(); }, register(options, component) { if (options.name === 'settings.section') slot = options; assert.equal(typeof component, 'function'); } },
   });
-  assert.equal(slot.id, 'subscriptions-lite'); assert.equal(slot.label(), 'dk-subscriptions');
+  assert.equal(slot.id, 'subscriptions-lite'); assert.equal(slot.label(), 'Subscriptions');
   assert.equal(dictionaries.size, 2); cleanup.forEach(fn => fn()); assert.equal(dictionaries.size, 0);
 });
 test('package, bundle and host use the client module name', () => {
@@ -65,7 +65,7 @@ test('locale dictionaries and packaged metadata are bilingual', () => {
   assert.deepEqual(Object.keys(h.messages.en).sort(), Object.keys(h.messages.zh).sort());
   for (const language of ['en', 'zh']) {
     const data = JSON.parse(readFileSync(new URL(`../locale/${language}.json`, import.meta.url), 'utf8'));
-    assert.equal(data.meta.title, 'dk-subscriptions'); assert.ok(data.meta.description);
+    assert.equal(data.meta.title, 'Subscriptions'); assert.equal(h.messages[language].title, data.meta.title); assert.ok(data.meta.description);
   }
 });
 test('selection prompts use the installed authorization contract option.id, not option.value', () => {

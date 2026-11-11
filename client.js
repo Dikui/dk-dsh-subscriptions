@@ -6,7 +6,7 @@ window.__ModuleLoader__.load({
     const namespace = 'dk-subscriptions';
     const messages = {
       en: {
-        title: 'dk-subscriptions', navigation: 'Subscription pages', modelsPage: 'Model connections', toolsPage: 'Data tools',
+        title: 'Subscriptions', navigation: 'Subscription pages', modelsPage: 'Model connections', toolsPage: 'Data tools',
         speed: 'Speed', speedNormal: 'Normal', speedDefaultOnly: 'Default only · this model has no verified switchable speed tiers',
         speedLoading: 'Loading speed…', speedError: 'Speed unavailable · retry', speedSaving: 'Saving speed…',
         speedStale: 'The saved speed is no longer supported. Select Normal before continuing.',
@@ -48,7 +48,7 @@ window.__ModuleLoader__.load({
         logoutConfirm: 'Clear the shared OAuth secrets, leaving a secret-free signed-out marker? Other DSH features using this same credential will also lose access.',
         authorize: 'Open official authorization', code: 'Authorization code', submit: 'Submit answer', choose: 'Choose an option',
         preparing: 'Preparing the authorization link. Keep this panel open. If no link appears after about 30 seconds, cancel, check your network, and retry.',
-        preparingTab: 'Preparing authorization. Return to dk-subscriptions for progress or to cancel.',
+        preparingTab: 'Preparing authorization. Return to Subscriptions for progress or to cancel.',
         opened: 'The authorization page was opened in a new tab. You can also use the link below.',
         popupBlocked: 'Popup blocked or closed. Open the official link below, or copy it into your browser.',
         authorizationLink: 'Official authorization link', copyLink: 'Copy authorization link', copyCode: 'Copy code',
@@ -71,7 +71,7 @@ window.__ModuleLoader__.load({
         saveError: 'The authorization flow finished without saving a usable credential. Reconnect; if it repeats, check the official adapter and credential service.',
       },
       zh: {
-        title: 'dk-subscriptions', navigation: '订阅管理子页', modelsPage: '模型接入', toolsPage: '数据工具',
+        title: 'Subscriptions', navigation: '订阅管理子页', modelsPage: '模型接入', toolsPage: '数据工具',
         speed: 'Speed', speedNormal: '正常', speedDefaultOnly: '仅默认速度 · 此模型没有已验证的可切换速度档位',
         speedLoading: '正在加载速度…', speedError: '速度不可用 · 重试', speedSaving: '正在保存速度…',
         speedStale: '已保存的速度不再受支持，请先选择正常档位再继续。',
@@ -113,7 +113,7 @@ window.__ModuleLoader__.load({
         logoutConfirm: '清除与官方提供商共用的 OAuth 密钥，仅保留不含密钥的退出标记？其他使用同一凭证的 DSH 功能也将失去访问权限。',
         authorize: '打开官方授权页面', code: '授权码', submit: '提交回答', choose: '请选择',
         preparing: '正在获取授权链接，请保持此面板打开。如果约 30 秒后仍未出现链接，请取消、检查网络后重试。',
-        preparingTab: '正在准备授权，请返回「dk-subscriptions」查看进度或取消。',
+        preparingTab: '正在准备授权，请返回「Subscriptions」查看进度或取消。',
         opened: '已在新标签页打开授权页面，也可以使用下方链接。',
         popupBlocked: '弹窗被拦截或已关闭，请点击下方官方链接，或复制到浏览器打开。',
         authorizationLink: '官方授权链接', copyLink: '复制授权链接', copyCode: '复制授权码',

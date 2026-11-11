@@ -119,7 +119,7 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 
 ## 名称变更
 
-包名与界面名称统一为 `dk-subscriptions`，GitHub 仓库为 [Dikui/dk-subscriptions](https://github.com/Dikui/dk-subscriptions)。改名不迁移或删除 OAuth 凭证，不改变现有模型路由；内部设置页标识、HTTP 路径和请求头保留兼容名称，以免影响已有调用。
+界面显示名称为 `Subscriptions`，包名保持 `dk-subscriptions`，GitHub 仓库为 [Dikui/dk-subscriptions](https://github.com/Dikui/dk-subscriptions)。改名不迁移或删除 OAuth 凭证，不改变现有模型路由；内部设置页标识、HTTP 路径和请求头保留兼容名称，以免影响已有调用。
 
 ## 开发与验证
 
