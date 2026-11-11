@@ -381,6 +381,7 @@ window.__ModuleLoader__.load({
       const chinese = chineseLocale();
       const list = items ?? [];
       const configured = list.filter(item => item.configured && item.quota);
+      const shown = list.filter(item => item.configured || item.error);
       const lowests = configured.map(item => quotaLowest(item.quota)).filter(value => value !== null);
       const percent = lowests.length ? `${Math.round(Math.min(...lowests) * 10) / 10}%` : null;
       const failed = items !== null && list.length > 0 && list.every(item => item.error);
@@ -400,11 +401,10 @@ window.__ModuleLoader__.load({
           items === null
             ? h('p', { className: 'sl-status', role: 'status' }, t('quotaLoading'))
             : h(React.Fragment, null,
-              list.map(item => h('div', { key: item.id, className: 'slq-section' },
+              shown.map(item => h('div', { key: item.id, className: 'slq-section' },
                 h('div', { className: 'slq-provider' }, quotaProviderNames[item.id]),
                 item.error ? h('p', { className: 'sl-error', role: 'alert' }, errorText(item.error))
-                  : item.configured ? quotaBody({ quota: item.quota, configured: true, busy, disabled: busy })
-                  : h('p', { className: 'sl-status', role: 'status' }, t('quotaNotConnected')))),
+                  : quotaBody({ quota: item.quota, configured: true, busy, disabled: busy }))),
               h('button', { type: 'button', disabled: busy || !configured.length, onClick: () => refresh(true) },
                 t(busy ? 'refreshingQuota' : 'refreshQuota')))));
     }

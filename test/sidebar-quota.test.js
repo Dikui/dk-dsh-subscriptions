@@ -54,7 +54,7 @@ test('sidebar icon reports the lowest remaining quota across connected accounts'
   }
 });
 
-test('hovering the gauge lists every account with remaining quota and reset times', async () => {
+test('hovering the gauge lists every connected account with remaining quota and reset times', async () => {
   const f = fixture();
   const panel = await panelHarness({ ...f, quota: true });
   try {
@@ -63,7 +63,7 @@ test('hovering the gauge lists every account with remaining quota and reset time
     const open = dialog(panel);
     assert.ok(open, 'hover opens the popover');
     const text = panel.text(open);
-    assert.ok(text.includes('OpenAI · ChatGPT') && text.includes('Kimi Code') && text.includes('Grok'), text);
+    assert.ok(text.includes('OpenAI · ChatGPT') && text.includes('Kimi Code'), text);
     assert.ok(text.includes('5-hour limit'), text);
     assert.ok(text.includes('40% remaining') && text.includes('90% remaining'), text);
     assert.ok(text.includes('Resets:'), text);
@@ -76,14 +76,14 @@ test('hovering the gauge lists every account with remaining quota and reset time
   } finally { panel.dispose(); }
 });
 
-test('unconnected accounts read as not connected instead of a percentage', async () => {
+test('unconnected accounts stay out of the quota popover', async () => {
   const f = fixture();
   const panel = await panelHarness({ ...f, quota: true });
   try {
     trigger(panel).props.onClick(); await panel.flush();
     const text = panel.text(dialog(panel));
-    assert.ok(text.includes('Grok') && text.includes('Not connected'), text);
-    assert.ok(!text.includes('Unsupported'), 'unconnected is not unsupported');
+    assert.ok(text.includes('OpenAI · ChatGPT') && text.includes('Kimi Code'), text);
+    assert.ok(!text.includes('Grok') && !text.includes('Not connected'), text);
   } finally { panel.dispose(); }
 });
 
