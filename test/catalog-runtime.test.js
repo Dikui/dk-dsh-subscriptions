@@ -115,6 +115,15 @@ test('registered subscription routes use the same remote catalogs and native OAu
         .reply(200, { models: grokLanguageRows() });
     }
   }
+  // apply() intentionally leaves the initial status warmup asynchronous. Wait for
+  // its metadata requests before asserting, so a slow runtime cannot race the test.
+  async function waitForWarmup(before, count, label) {
+    const deadline = Date.now() + 3000;
+    while (calls().length < before + count && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(calls().length, before + count, `${label}: startup metadata warmup did not settle`);
+  }
   async function mount({ ids = [], expired = false, config = {} } = {}) {
     const records = new Map(), tools = new Map(), saved = [];
     let adapter, settingsFetch;
@@ -173,7 +182,9 @@ test('registered subscription routes use the same remote catalogs and native OAu
     let runtime;
     await t.test('already-authorized startup warms all three real metadata sources without inference', async () => {
       for (const vendor of vendors) metadata(vendor.id);
+      const before = calls().length;
       runtime = await mount({ ids: vendors.map(vendor => vendor.id) });
+      await waitForWarmup(before, 6, 'all three vendors');
       assert.deepEqual([...runtime.tools.keys()].sort(), ['grok_x_search', 'kimi_call_data_source_tool', 'kimi_get_data_source_desc', 'subscription_accounts']);
       assert.deepEqual(calls().map(([method, origin, path]) => [method, origin, path.split('?')[0]]).sort(), [
         ['GET', 'https://chatgpt.com', '/backend-api/codex/models'], ['GET', 'https://chatgpt.com', '/backend-api/wham/usage'],
@@ -387,6 +398,7 @@ test('registered subscription routes use the same remote catalogs and native OAu
         metadata(id, { access: accessFor(id, '-ROTATED') });
       }
       const refreshed = await mount({ ids: vendors.map(vendor => vendor.id), expired: true });
+      await waitForWarmup(0, 9, 'expired OAuth grants');
       for (const vendor of vendors) {
         const record = refreshed.records.get(native.recordKeyFor(vendor.id));
         assert.equal(record.payload.access, accessFor(vendor.id, '-ROTATED'));
@@ -421,6 +433,7 @@ test('registered subscription routes use the same remote catalogs and native OAu
       await assert.rejects(apply({}, { kimiDatasource: 'true' }), /kimiDatasource must be a boolean/);
       metadata('kimi-coding');
       const enabled = await mount({ ids: ['kimi-coding'], config: { kimiDatasource: true } });
+      await waitForWarmup(0, 2, 'Kimi datasource');
       const state = await enabled.tool.execute({ action: 'status' }, exec);
       assert.deepEqual(state.vendorTools.kimiDatasource, { enabled: true, reason: null });
       const settings = await enabled.settingsFetch(new Request('http://dsh.internal/api/subscriptions-lite'));
@@ -447,6 +460,7 @@ test('registered subscription routes use the same remote catalogs and native OAu
       }, { headers: { 'content-type': 'application/json' } });
       metadata('xai', { access: accessFor('xai', '-ROTATED') });
       const enabled = await mount({ ids: ['xai'], expired: true, config: { grokXSearch: true } });
+      await waitForWarmup(0, 3, 'xAI OAuth and metadata');
       assert.deepEqual((await enabled.tool.execute({ action: 'status' }, exec)).vendorTools.grokXSearch, { enabled: true, reason: null });
       assert.deepEqual(inferenceCalls(), [], 'status may fetch metadata, never execute X Search');
       assert.deepEqual(calls(), [['POST', 'https://auth.x.ai', '/oauth2/token'],

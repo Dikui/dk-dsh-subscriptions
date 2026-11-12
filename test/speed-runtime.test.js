@@ -88,6 +88,9 @@ test('session Speed survives native streamSimple conversion into the actual Code
     assert.equal((await request('speed-select', 'session-a', 'priority', false)).status, 400);
     assert.equal((await request('speed-select', 'session-a', 'flex', true)).status, 400);
     assert.equal((await request('speed-select', 'session-a', 'fast', true)).status, 200);
+    // New sessions inherit the model's last tier, so make session-b explicitly
+    // Normal before checking that Normal omits the nonstandard Codex field.
+    assert.equal((await request('speed-select', 'session-b', 'default', true)).status, 200);
     await boundary('session-a'); await boundary('session-b');
     mock.get('https://chatgpt.com').intercept({ method: 'POST', path: '/backend-api/codex/responses' }).reply(200, async ({ body, headers }) => {
       const bytes = Buffer.from(await new Response(body).arrayBuffer());
@@ -107,7 +110,7 @@ test('session Speed survives native streamSimple conversion into the actual Code
     await stream('session-a'); await stream('session-b');
     assert.equal(captured[0].service_tier, 'priority');
     assert.equal(captured[0].reasoning.effort, 'high'); assert.equal(captured[0].model, model);
-    assert.equal(Object.hasOwn(captured[1], 'service_tier'), false, 'Normal does not send a nonstandard Codex field');
+    assert.equal(Object.hasOwn(captured[1], 'service_tier'), false, 'explicit Normal does not send a nonstandard Codex field');
     await request('speed-select', 'session-a', 'ultrafast', true);
     await stream('session-a'); // Same step/retry keeps priority.
     assert.equal(captured[2].service_tier, 'priority');
