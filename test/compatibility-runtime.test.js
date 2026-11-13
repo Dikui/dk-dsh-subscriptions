@@ -19,7 +19,7 @@ test('manifest passes the DSH compatibility gate only for verified releases', {
   const { evaluatePluginCompatibility, getDshRuntimeVersion } = await import(pathToFileURL(bootEntry).href);
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
   const peersOnly = { name: manifest.name, version: manifest.version, peerDependencies: manifest.peerDependencies };
-  for (const version of ['0.2.1-rc.5', '0.2.2-rc.1', '0.2.2-rc.2', getDshRuntimeVersion()]) {
+  for (const version of ['0.2.1-rc.5', '0.2.2-rc.1', '0.2.2-rc.2', '0.2.2-rc.3', getDshRuntimeVersion()]) {
     assert.equal(evaluatePluginCompatibility(manifest, {}, version), undefined,
       `engines.dsh must accept verified DSH ${version} without an exemption`);
     assert.equal(evaluatePluginCompatibility(peersOnly, {}, version), undefined,
