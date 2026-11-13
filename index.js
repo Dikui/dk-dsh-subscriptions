@@ -5,7 +5,7 @@ import { PiAiAdapter, recordKeyFor } from '@deepseek-ai/dsh-llm-pi-ai';
 import { createHttpHandler, createSubscriptions, fail, PROVIDERS, safeError, subscriptionBindings } from './core.js';
 import { createAutoProxy } from './network.js';
 import { createAccountModels, createAccountQuota } from './models.js';
-import { accountQuotaSources } from './quota-sources.js';
+import { accountQuotaSources, opencodeGoQuotaSource } from './quota-sources.js';
 import { accountModelSources } from './model-sources.js';
 import { createKimiTools } from './kimi-tools.js';
 import { createGrokSearchTool } from './grok-tools.js';
@@ -16,9 +16,14 @@ import packageInfo from './package.json' with { type: 'json' };
 export const name = 'dk-subscriptions';
 export const inject = ['authorization', 'credentials', 'llm', 'connection', 'tools'];
 
-export async function apply(ctx, { kimiDatasource = false, grokXSearch = false } = {}) {
+export async function apply(ctx, { kimiDatasource = false, grokXSearch = false, opencodeGoQuota = false,
+  opencodeApiKeyRef = 'OPENCODE_GO_API_KEY' } = {}) {
   if (typeof kimiDatasource !== 'boolean') throw new TypeError('kimiDatasource must be a boolean.');
   if (typeof grokXSearch !== 'boolean') throw new TypeError('grokXSearch must be a boolean.');
+  if (typeof opencodeGoQuota !== 'boolean') throw new TypeError('opencodeGoQuota must be a boolean.');
+  if (typeof opencodeApiKeyRef !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(opencodeApiKeyRef)) {
+    throw new TypeError('opencodeApiKeyRef must be an environment variable name.');
+  }
   const kimiDatasourceStatus = Object.freeze({ enabled: kimiDatasource, reason: kimiDatasource ? null : 'NOT_ENABLED' });
   const grokXSearchStatus = Object.freeze({ enabled: grokXSearch, reason: grokXSearch ? null : 'NOT_ENABLED' });
   // Resolve the exact pi-ai version shipped with the official adapter, not a
@@ -46,6 +51,20 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false }
   const codex = bindings.profiles().get('subscription-openai-codex');
   if (network.enabled && codex) codex.transport = 'sse';
   const accountModels = new Map(), accountQuotas = new Map();
+  const readOpencodeKey = async signal => {
+    if (!opencodeGoQuota) return undefined;
+    signal?.throwIfAborted();
+    try {
+      const resolved = await ctx.credentials.resolve(opencodeApiKeyRef);
+      return typeof resolved?.value === 'string' && resolved.value ? resolved.value : undefined;
+    } catch { return undefined; }
+  };
+  if (opencodeGoQuota) {
+    accountQuotas.set('opencode-go', createAccountQuota(opencodeGoQuotaSource({
+      readKey: readOpencodeKey,
+      fetchCatalog: (url, options) => network.run(() => fetch(url, options)),
+    })));
+  }
   const authModels = createModels(bindings.auth);
   for (const profile of bindings.profiles().values()) authModels.setProvider(profile.piProvider);
   for (const provider of PROVIDERS) {
@@ -162,6 +181,7 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false }
     describe: key => ctx.authorization.describe(key),
     begin: request => network.run(() => ctx.authorization.begin(request)),
   }, credentials: ctx.credentials, llm: ctx.llm, catalog, keyFor: recordKeyFor, accountModels, accountQuotas,
+    readQuotaKey: (id, signal) => id === 'opencode-go' ? readOpencodeKey(signal) : undefined,
     vendorTools: { kimiDatasource: kimiDatasourceStatus, grokXSearch: grokXSearchStatus } });
   // Startup warmup is a single lifetime-owned metadata operation, not a timer.
   // Deliberately not awaited: a slow catalog endpoint would otherwise delay the

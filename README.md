@@ -26,11 +26,17 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 
 ## 订阅额度
 
-模型接入卡片显示官方元数据快照中的**剩余百分比**、限额窗口、重置时间及更新时间；未知字段不代表零或无限额度。DSH 左侧边栏底部（用户头像上方）另有一个小仪表图标，悬停展开已连接账号的额度窗口、剩余比例、重置时间与更新时间（未连接的订阅不列出）；移开或按 Esc 收起，触屏和键盘可点击展开，每次展开拉取一次窄快照。不支持或失败在对应账号下说明。OpenAI 读取 `GET /backend-api/wham/usage`，Kimi 读取 `GET /coding/v1/usages`，兼容当前 `usages` 比例及旧版 `usage` / `limits`。复用共享 OAuth、官方刷新锁和插件网络作用域；不发送推理，不读取 API key。与模型目录一样，启动、登录完成及状态访问按需同步，成功或失败缓存 60 秒，不后台轮询；**刷新额度 · 不发送推理请求**或 `subscription_accounts { action: "quota", provider: "openai-codex" }` 可强制刷新。
+额度只显示在 DSH 左侧边栏底部（用户头像上方）的小仪表图标；悬停展开已连接账号的额度窗口、剩余比例、重置时间与更新时间。未知字段不代表零或无限额度；只列出有可用额度来源的账号，未连接或没有额度接口的订阅（如 Grok）不显示额度行。移开或按 Esc 收起，触屏和键盘可点击展开，每次展开拉取一次窄快照。支持但暂时失败的账号仍显示错误。OpenAI 读取 `GET /backend-api/wham/usage`，Kimi 读取 `GET /coding/v1/usages`，兼容当前 `usages` 比例及旧版 `usage` / `limits`。复用共享 OAuth、官方刷新锁和插件网络作用域；不发送推理，默认不读取 API key（OpenCode Go 额度是显式开启的例外，见下）。与模型目录一样，启动、登录完成及状态访问按需同步，成功或失败缓存 60 秒，不后台轮询；**刷新额度 · 不发送推理请求**或 `subscription_accounts { action: "quota", provider: "openai-codex" }` 可强制刷新。
 
-接口错误不会隐藏授权或模型状态。当前仅展示 OpenAI 主／次窗口；存在额外独立限额时标为「部分额度信息不可用」。不展示 credits、钱包或货币余额，不把目录成功当作额度保证。Grok 没有已验证的官方 OAuth 订阅额度接口，明确显示不可用，不调用需要独立管理密钥的计费 API。数据是查询时快照，刷新不保证推理权益或订阅专属扣费。
+接口错误不会隐藏授权或模型状态。当前仅展示 OpenAI 主／次窗口；存在额外独立限额时标为「部分额度信息不可用」。不展示 credits、钱包或货币余额，不把目录成功当作额度保证。Grok 没有已验证的官方 OAuth 订阅额度接口，因此不显示额度行；也不调用需要独立管理密钥的计费 API。数据是查询时快照，刷新不保证推理权益或订阅专属扣费。
 
-来源：[OpenAI usage 请求](https://github.com/openai/codex/blob/main/codex-rs/backend-client/src/client/rate_limit_resets.rs)、[窗口结构](https://github.com/openai/codex/blob/main/codex-rs/codex-backend-openapi-models/src/models/rate_limit_window_snapshot.rs)、[Kimi 当前结构](https://github.com/MoonshotAI/kimi-code/blob/eb2035f3cad57cc12d4d5082ec626f7f0ea5f651/packages/oauth/src/managed-usage.ts)、[Kimi 旧结构](https://github.com/MoonshotAI/kimi-cli/blob/main/src/kimi_cli/ui/shell/usage.py)。验证只使用合成凭证和模拟网络；未查询真实账号或验证已安装 GUI。
+### OpenCode Go（API key，默认关闭）
+
+OpenCode Go 的用量来自官方客户端使用的 `GET https://opencode.ai/zen/go/v1/usage`：Console API key 直接作为 Bearer，不需要 workspace/org header，返回 `rolling`、`weekly`、`monthly` 三个百分比窗口。该端点来自官方客户端实现，不是公开文档承诺的稳定接口；变更时只影响额度显示，不影响推理。
+
+默认关闭。在插件配置中设置 `opencodeGoQuota: true`，并用 `opencodeApiKeyRef` 指定凭证引用（默认 `OPENCODE_GO_API_KEY`）后，侧边栏仪表会把它作为一个额度来源列出；Models 页和订阅账号面板都不显示额度。设置页不增加第四张卡，`status()` 仍只返回三个 OAuth 路由。插件只解析该引用，用 key 的 SHA-256 做账号隔离，不记录或返回 key；查询不发送推理，不回退其他凭证。关闭时完全不读取 API key。修改配置后需完全退出并重启 DSH。手动编辑 profile 的 `cordis.patch.yml` 时，覆盖块的 `id` 必须是 `subscriptions-lite`（bundle 插入的 id），不是插件名 `dsh-subscriptions`；否则 DSH 会忽略该块。
+
+来源：[OpenAI usage 请求](https://github.com/openai/codex/blob/main/codex-rs/backend-client/src/client/rate_limit_resets.rs)、[窗口结构](https://github.com/openai/codex/blob/main/codex-rs/codex-backend-openapi-models/src/models/rate_limit_window_snapshot.rs)、[Kimi 当前结构](https://github.com/MoonshotAI/kimi-code/blob/eb2035f3cad57cc12d4d5082ec626f7f0ea5f651/packages/oauth/src/managed-usage.ts)、[Kimi 旧结构](https://github.com/MoonshotAI/kimi-cli/blob/main/src/kimi_cli/ui/shell/usage.py)、[OpenCode Go 文档](https://opencode.ai/docs/go/)。验证只使用合成凭证和模拟网络；OpenCode 端点另用现有 key 做过一次只读 GET，未在已安装 GUI 中验证显示。
 
 ## Kimi 数据工具（显式启用）
 
@@ -109,7 +115,7 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 ## 安全边界
 
 - 只接受官方 `llm-pi-ai/<provider>` 下 `kind: grant`、`type: oauth` 的凭证；UI 和工具不返回 access/refresh token。
-- 新路由移除了 API-key 认证 handler，并禁用环境/本地文件凭证发现。没有 OAuth 就失败，**不会退到 API key 或其他厂商**。该保证只覆盖本插件的三个路由，不改变其他已安装插件。
+- 新路由移除了 API-key 认证 handler，并禁用环境/本地文件凭证发现。没有 OAuth 就失败，**不会退到 API key 或其他厂商**。该保证覆盖本插件的三个 OAuth 路由；OpenCode Go 是独立的 quota-only 读取，不能用于推理、登录或模型目录，也不改变其他已安装插件。
 - 复用官方凭证及刷新锁。退出在同一写锁中清除共享 OAuth 的密钥，留下不含密钥的 `subscription-revoked` 标记，**也会使官方 pi-ai 对应路由退出**。该版本存储接口没有条件删除能力，保留标记可避免误删并发写入的 API key，并阻止原路由发现环境密钥。重新登录会替换标记。退出不会取消订阅，不代表远程令牌撤销，也不保证终止已发送请求或另一入口后来发起的登录。
 - 登录和回答授权提示仅在设置界面提供。`subscription_accounts` 工具提供状态、账号模型刷新、短测试、退出；不会返回授权验证码、链接、账号标识或令牌。
 - HTTP 接口由 DSH Connection 认证保护；POST 额外校验同源、JSON 和专用请求头。授权尝试有 15 分钟期限，界面退出时尽力取消自己发起的尝试。
@@ -117,9 +123,13 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 - 只显示脱敏错误码，不透传可能含 token 的上游异常文本。
 - 不自动迁移、导出或读取其他插件的凭证，不安装厂商 CLI，不修改现有 API 配置。
 
+## 界面位置
+
+订阅账号（Model connections）和 Data tools 通过官方 `settings.models.footer` 插槽挂在 **Settings → Models** 页面底部，不再单独占用左侧 Subscriptions 设置页；两个 tab 仍可切换。订阅账号卡片只保留连接、模型和测试操作；所有额度（含 OpenCode Go）统一在左下角仪表显示。
+
 ## 名称变更
 
-界面显示名称为 `Subscriptions`，包名保持 `dk-subscriptions`，GitHub 仓库为 [Dikui/dk-subscriptions](https://github.com/Dikui/dk-subscriptions)。改名不迁移或删除 OAuth 凭证，不改变现有模型路由；内部设置页标识、HTTP 路径和请求头保留兼容名称，以免影响已有调用。
+界面显示名称为 `Subscriptions`，包名保持 `dk-subscriptions`，GitHub 仓库为 [Dikui/dk-subscriptions](https://github.com/Dikui/dk-subscriptions)。改名不迁移或删除 OAuth 凭证，不改变现有模型路由；内部插件 id、HTTP 路径和请求头保留兼容名称，以免影响已有调用。
 
 ## 开发与验证
 

@@ -6,7 +6,7 @@ window.__ModuleLoader__.load({
     const namespace = 'dk-subscriptions';
     const messages = {
       en: {
-        title: 'Subscriptions', navigation: 'Subscription pages', modelsPage: 'Model connections', toolsPage: 'Data tools',
+        title: 'Subscriptions', intro: 'Manage subscription accounts and data tools used by model access.', navigation: 'Subscription pages', modelsPage: 'Model connections', toolsPage: 'Data tools',
         speed: 'Speed', speedNormal: 'Normal', speedDefaultOnly: 'Default only · this model has no verified switchable speed tiers',
         speedLoading: 'Loading speed…', speedError: 'Speed unavailable · retry', speedSaving: 'Saving speed…',
         speedStale: 'The saved speed is no longer supported. Select Normal before continuing.',
@@ -24,7 +24,7 @@ window.__ModuleLoader__.load({
         catalogVendor: 'Provider catalog · model access and subscription billing are not verified',
         accountModels: 'Remote model catalog', accountNoModels: 'No selectable remote models loaded',
         quota: 'Subscription quota', quotaUnknown: 'Quota unknown', quotaUnloaded: 'Connect to load quota', quotaLoading: 'Loading quota…',
-        quotaUnsupported: 'No verified OAuth quota endpoint · quota unavailable', quotaPartial: 'Some quota details are unavailable',
+        quotaUnsupported: 'No verified OAuth quota endpoint · quota unavailable', quotaNone: 'No quota to display', quotaPartial: 'Some quota details are unavailable',
         refreshQuota: 'Refresh quota · no inference request', refreshingQuota: 'Refreshing quota…',
         quotaRemaining: 'remaining', quotaResets: 'Resets', quotaUpdated: 'Updated', quotaStale: 'Stale · refresh to update', unknown: 'Unknown',
         quotaShort: 'Quota', quotaNotConnected: 'Not connected', quotaUnsupportedShort: 'Unsupported', quotaUnavailableShort: 'Unavailable',
@@ -71,7 +71,7 @@ window.__ModuleLoader__.load({
         saveError: 'The authorization flow finished without saving a usable credential. Reconnect; if it repeats, check the official adapter and credential service.',
       },
       zh: {
-        title: 'Subscriptions', navigation: '订阅管理子页', modelsPage: '模型接入', toolsPage: '数据工具',
+        title: 'Subscriptions', intro: '管理订阅账号和模型访问使用的数据工具。', navigation: '订阅管理子页', modelsPage: '模型接入', toolsPage: '数据工具',
         speed: 'Speed', speedNormal: '正常', speedDefaultOnly: '仅默认速度 · 此模型没有已验证的可切换速度档位',
         speedLoading: '正在加载速度…', speedError: '速度不可用 · 重试', speedSaving: '正在保存速度…',
         speedStale: '已保存的速度不再受支持，请先选择正常档位再继续。',
@@ -89,7 +89,7 @@ window.__ModuleLoader__.load({
         catalogVendor: '厂商远端目录 · 未验证逐模型权限或订阅扣费',
         accountModels: '远端模型目录', accountNoModels: '尚未加载可选择的远端模型',
         quota: '订阅额度', quotaUnknown: '额度未知', quotaUnloaded: '连接后加载额度', quotaLoading: '正在加载额度…',
-        quotaUnsupported: '没有已验证的 OAuth 额度接口 · 额度不可用', quotaPartial: '部分额度信息不可用',
+        quotaUnsupported: '没有已验证的 OAuth 额度接口 · 额度不可用', quotaNone: '暂无可显示的额度', quotaPartial: '部分额度信息不可用',
         refreshQuota: '刷新额度 · 不发送推理请求', refreshingQuota: '正在刷新额度…',
         quotaRemaining: '剩余', quotaResets: '重置', quotaUpdated: '更新于', quotaStale: '数据已过期 · 请刷新', unknown: '未知',
         quotaShort: '额度', quotaNotConnected: '未连接', quotaUnsupportedShort: '不支持', quotaUnavailableShort: '不可用',
@@ -209,30 +209,30 @@ window.__ModuleLoader__.load({
       return data;
     }
     const styles = `
-      .subscriptions-lite{color:var(--dsw-alias-label-primary);display:grid;gap:20px;font-size:14px;line-height:1.5;min-width:0;width:100%;max-width:840px;margin-inline:auto}
+      .subscriptions-lite{color:var(--dsw-alias-label-primary);display:grid;gap:12px;font-size:14px;line-height:1.5;min-width:0;width:100%;max-width:720px;margin-inline:auto}
+      .subscriptions-lite.sl-embedded{max-width:none;margin-top:12px;padding-top:20px;border-top:0.5px solid var(--dsw-alias-border-l2)}
       .subscriptions-lite *{box-sizing:border-box}.subscriptions-lite h2,.subscriptions-lite h3,.subscriptions-lite p{margin:0}
-      .subscriptions-lite h2{font-size:20px}.subscriptions-lite h3{font-size:16px}
+      .subscriptions-lite h2{font-size:16px;line-height:24px;font-weight:500}.subscriptions-lite h3{font-size:14px;line-height:22px;font-weight:500}
       .subscriptions-lite header,.subscriptions-lite .sl-actions,.subscriptions-lite .sl-model{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-      .subscriptions-lite header{justify-content:space-between}.subscriptions-lite .sl-card{padding:16px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-1);display:grid;gap:12px;min-width:0}
-      .subscriptions-lite .sl-muted{color:var(--dsw-alias-label-secondary)}.subscriptions-lite .sl-status{font-size:12px;color:var(--dsw-alias-label-secondary)}
+      .subscriptions-lite header{justify-content:space-between}.subscriptions-lite .sl-actions button{height:28px;min-height:28px;padding:0 10px;border-radius:var(--dsw-radius-sm);font-size:12px;line-height:18px}.subscriptions-lite .sl-card{padding:12px 14px;border:0.5px solid var(--dsw-alias-settings-card-stroke);border-radius:var(--dsw-radius-xl);background:var(--dsw-alias-settings-card-fill);display:grid;gap:12px;min-width:0}
+      .subscriptions-lite .sl-muted{color:var(--dsw-alias-label-secondary)}.subscriptions-lite .sl-intro{font-size:14px;line-height:22px;color:var(--dsw-alias-label-tertiary)}.subscriptions-lite .sl-status{font-size:12px;color:var(--dsw-alias-label-secondary)}
       .subscriptions-lite .sl-saved{color:var(--dsw-alias-state-success-primary)}.subscriptions-lite .sl-error{color:var(--dsw-alias-state-error-primary)}
-      .subscriptions-lite button,.subscriptions-lite input,.subscriptions-lite select{font:inherit;color:inherit;background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:7px 10px;min-height:36px;max-width:100%}
-      .subscriptions-lite button{cursor:pointer}.subscriptions-lite button:disabled{cursor:not-allowed;opacity:.5}.subscriptions-lite button:not(:disabled):hover{background:var(--dsw-alias-bg-layer-2)}
+      .subscriptions-lite button{font:inherit;color:inherit;background:transparent;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md);padding:0 14px;min-height:36px;max-width:100%}
+      .subscriptions-lite input,.subscriptions-lite select{font:inherit;color:inherit;background:transparent;border:0.5px solid var(--dsw-alias-border-l3);border-radius:var(--dsw-radius-md);padding:7px 10px;min-height:36px;max-width:100%}
+      .subscriptions-lite button{cursor:pointer}.subscriptions-lite button:disabled{cursor:not-allowed;opacity:.4}.subscriptions-lite button:not(:disabled):hover{background:var(--dsw-alias-interactive-bg-hover)}
       .subscriptions-lite :focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}.subscriptions-lite a{color:var(--dsw-alias-brand-primary);text-underline-offset:3px}
       .subscriptions-lite .sl-model label{flex:1 1 220px;display:grid;gap:4px;min-width:0}.subscriptions-lite select{width:100%}
-      .subscriptions-lite .sl-flow{border-top:1px solid var(--dsw-alias-border-l1);padding-top:12px;display:grid;gap:10px}
+      .subscriptions-lite .sl-flow{border-top:0.5px solid var(--dsw-alias-border-l2);padding-top:10px;display:grid;gap:10px}
       .subscriptions-lite form{display:grid;gap:8px}.subscriptions-lite form label{display:grid;gap:4px}.subscriptions-lite form button{justify-self:start}
       .subscriptions-lite pre{white-space:pre-wrap;overflow-wrap:anywhere;margin:0;background:var(--dsw-alias-bg-layer-2);padding:10px;border-radius:6px;font-size:13px}
       .subscriptions-lite .sl-notice{display:grid;gap:5px;overflow-wrap:anywhere}.subscriptions-lite .sl-notice label{display:grid;gap:4px}.subscriptions-lite .sl-notice input{width:100%}.subscriptions-lite .sl-code{font-family:monospace;user-select:all}
-      .subscriptions-lite .sl-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;padding:4px;border-radius:12px;background:var(--dsw-alias-bg-layer-2)}
-      .subscriptions-lite .sl-nav button{border:0;background:transparent;color:var(--dsw-alias-label-secondary);border-radius:8px;min-height:40px}
-      .subscriptions-lite .sl-nav button[aria-current=page]{background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font-weight:600;box-shadow:0 1px 3px #0001}
-      .subscriptions-lite .sl-page{display:grid;gap:16px;min-width:0}.subscriptions-lite .sl-data{padding:20px;gap:18px}
+      .subscriptions-lite .sl-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:2px;padding:3px;border-radius:var(--dsw-radius-lg);background:var(--dsw-alias-bg-module-platform)}
+      .subscriptions-lite .sl-nav button{border:0;background:transparent;color:var(--dsw-alias-label-secondary);border-radius:var(--dsw-radius-md);min-height:34px}
+      .subscriptions-lite .sl-nav button[aria-current=page]{background:var(--dsw-alias-settings-card-fill);color:var(--dsw-alias-label-primary);font-weight:500;box-shadow:0 1px 2px #0001}
+      .subscriptions-lite .sl-page{display:grid;gap:12px;min-width:0}.subscriptions-lite .sl-data{padding:12px 14px;gap:12px}
       .subscriptions-lite .sl-badge{padding:3px 9px;border-radius:20px;background:var(--dsw-alias-bg-layer-2);white-space:nowrap}
-      .subscriptions-lite .sl-details{border-top:1px solid var(--dsw-alias-border-l1);padding-top:14px}.subscriptions-lite .sl-details summary{cursor:pointer;color:var(--dsw-alias-label-secondary)}
-      .subscriptions-lite .sl-details>div{display:grid;gap:10px;margin-top:12px}
-      .subscriptions-lite .sl-quota{border-top:1px solid var(--dsw-alias-border-l1);padding-top:12px;display:grid;gap:8px;min-width:0;overflow-wrap:anywhere}
-      .subscriptions-lite .sl-quota-row{display:grid;gap:4px}.subscriptions-lite progress{width:100%;height:8px;accent-color:var(--dsw-alias-brand-primary)}
+      .subscriptions-lite .sl-details{border-top:0.5px solid var(--dsw-alias-border-l2);padding-top:10px}.subscriptions-lite .sl-details summary{cursor:pointer;color:var(--dsw-alias-label-secondary)}
+      .subscriptions-lite .sl-details>div{display:grid;gap:10px;margin-top:10px}
     `;
     return {
       inject: ['slots', 'locale'],
@@ -298,8 +298,8 @@ window.__ModuleLoader__.load({
       .slq-section{display:grid;gap:6px;padding-top:8px;border-top:1px solid var(--dsw-alias-border-l1)}
       .slq-provider{color:var(--dsw-alias-label-primary);font-size:12px;font-weight:600}
     `;
-    const quotaProviderNames = { 'openai-codex': 'OpenAI · ChatGPT', 'kimi-coding': 'Kimi Code', xai: 'Grok' };
-    const quotaProviders = ['openai-codex', 'kimi-coding', 'xai'];
+    const quotaProviderNames = { 'openai-codex': 'OpenAI · ChatGPT', 'kimi-coding': 'Kimi Code', xai: 'Grok', 'opencode-go': 'OpenCode Go' };
+    const quotaProviders = ['openai-codex', 'kimi-coding', 'xai', 'opencode-go'];
     const quotaIcon = h('svg', { viewBox: '0 0 16 16', width: 15, height: 15, 'aria-hidden': true, focusable: false },
       h('path', { d: 'M2.8 12.2a5.2 5.2 0 0 1 10.4 0', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4, 'stroke-linecap': 'round' }),
       h('path', { d: 'M8 12.2 10.5 8.4', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4, 'stroke-linecap': 'round' }),
@@ -380,14 +380,21 @@ window.__ModuleLoader__.load({
       }
       const chinese = chineseLocale();
       const list = items ?? [];
-      const configured = list.filter(item => item.configured && item.quota);
-      const shown = list.filter(item => item.configured || item.error);
-      const lowests = configured.map(item => quotaLowest(item.quota)).filter(value => value !== null);
+      const connected = list.filter(item => item.configured);
+      // A provider without a quota source (for example Grok) is not a quota row.
+      const capable = list.filter(item => item.configured && (item.error
+        || (item.quota && item.quota.state !== 'unsupported' && item.quota.source !== 'none')));
+      const shown = list.filter(item => {
+        if (item.quota && (item.quota.state === 'unsupported' || item.quota.source === 'none')) return false;
+        return Boolean(item.configured || item.error);
+      });
+      const lowests = capable.map(item => item.quota ? quotaLowest(item.quota) : null).filter(value => value !== null);
       const percent = lowests.length ? `${Math.round(Math.min(...lowests) * 10) / 10}%` : null;
-      const failed = items !== null && list.length > 0 && list.every(item => item.error);
+      const failed = items !== null && shown.length > 0 && shown.every(item => item.error || item.quota?.state === 'error');
       const value = failed ? t('quotaUnavailableShort')
         : items === null ? '\u2026'
-        : !configured.length ? t('quotaNotConnected')
+        : !connected.length ? t('quotaNotConnected')
+        : !capable.length ? t('quotaUnsupportedShort')
         : percent ?? t('quotaUnknown');
       const title = percent ? `${t('quota')} · ${chinese ? `${t('quotaRemaining')} ${percent}` : `${percent} ${t('quotaRemaining')}`}`
         : `${t('quota')} · ${value === '\u2026' ? t('quotaLoading') : value}`;
@@ -401,11 +408,13 @@ window.__ModuleLoader__.load({
           items === null
             ? h('p', { className: 'sl-status', role: 'status' }, t('quotaLoading'))
             : h(React.Fragment, null,
-              shown.map(item => h('div', { key: item.id, className: 'slq-section' },
-                h('div', { className: 'slq-provider' }, quotaProviderNames[item.id]),
-                item.error ? h('p', { className: 'sl-error', role: 'alert' }, errorText(item.error))
-                  : quotaBody({ quota: item.quota, configured: true, busy, disabled: busy }))),
-              h('button', { type: 'button', disabled: busy || !configured.length, onClick: () => refresh(true) },
+              shown.length
+                ? shown.map(item => h('div', { key: item.id, className: 'slq-section' },
+                  h('div', { className: 'slq-provider' }, quotaProviderNames[item.id]),
+                  item.error ? h('p', { className: 'sl-error', role: 'alert' }, errorText(item.error))
+                    : quotaBody({ quota: item.quota, configured: true, busy, disabled: busy })))
+                : h('p', { className: 'sl-status', role: 'status' }, t('quotaNone')),
+              h('button', { type: 'button', disabled: busy || !shown.length, onClick: () => refresh(true) },
                 t(busy ? 'refreshingQuota' : 'refreshQuota')))));
     }
         function Prompt({ prompt, disabled, answer }) {
@@ -506,7 +515,7 @@ window.__ModuleLoader__.load({
                   }, currentSpeed.tiers.map(tier => h('option', { key: tier.id, value: tier.id }, label(tier))))),
                 currentSpeed.stale && h('button', { type: 'button', disabled: busy, title: t('speedStale'), onClick: () => choose('default') }, t('speedNormal'))));
         }
-        function Panel({ close }) {
+        function Panel({ close, embedded = close === undefined }) {
           React.useSyncExternalStore(subscribe, snapshot, snapshot);
           const [page, setPage] = React.useState('modelsPage');
           const pageId = React.useId();
@@ -682,18 +691,12 @@ window.__ModuleLoader__.load({
               if (control.current?.active()) setCopyStates(previous => ({ ...previous, [provider]: 'copyHelp' }));
             }
           }
-          function quotaView(provider, disabled, isRunning) {
-            const quota = provider.quota === undefined ? null : validQuota(provider.quota, provider.configured) ? provider.quota : { state: 'error', error: 'QUOTA_INVALID', windows: [] };
-            return h('section', { className: 'sl-quota', 'aria-label': t('quota') },
-              h('strong', null, t('quota')),
-              !quota ? h('p', { className: 'sl-status', role: 'status' }, t('quotaUnknown'))
-                : quotaBody({ quota, configured: provider.configured, busy: busy[provider.id] === 'quota',
-                  disabled: disabled || isRunning, refresh: () => run(provider.id, 'quota') }));
-          }
           const link = (url, label) => h('a', { href: url, target: '_blank', rel: 'noopener noreferrer', referrerPolicy: 'no-referrer' }, label);
-          return h('section', { className: 'subscriptions-lite', 'aria-label': t('title') },
+          return h('section', { className: `subscriptions-lite${embedded ? ' sl-embedded' : ''}`, 'aria-label': t('title') },
             h('style', null, styles),
-            h('header', null, h('h2', null, t('title')), h('button', { type: 'button', onClick: () => { control.current?.dispose(); close(); } }, t('close'))),
+            h('header', null, h('h2', null, t('title')),
+              close && h('button', { type: 'button', onClick: () => { control.current?.dispose(); close(); } }, t('close'))),
+            h('p', { className: 'sl-intro' }, t('intro')),
             h('nav', { className: 'sl-nav', 'aria-label': t('navigation') }, ['modelsPage', 'toolsPage'].map(id =>
               h('button', { key: id, type: 'button', ref: id === 'modelsPage' ? modelsPageButton : undefined,
                 'aria-current': page === id ? 'page' : undefined, 'aria-controls': pageId, onClick: () => setPage(id) }, t(id)))),
@@ -737,7 +740,6 @@ window.__ModuleLoader__.load({
                   provider.configured && h('button', { type: 'button', disabled: disabled || isRunning, onClick: () => {
                     if (window.confirm(t('logoutConfirm'))) run(provider.id, 'logout');
                   } }, t('logout'))),
-                quotaView(provider, disabled, isRunning),
                 provider.id === 'xai' && h('details', { className: 'sl-details' }, h('summary', null, t('billing')), h('div', null,
                   h('p', { className: 'sl-muted' }, t('xai')),
                   h('div', { className: 'sl-actions' }, link('https://x.ai/news/grok-opencode', t('grokNews')), link('https://docs.x.ai/build/cli/headless-scripting', t('grokDocs'))))),
@@ -797,8 +799,8 @@ window.__ModuleLoader__.load({
         ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
           name: 'sidebar.footer.action', id: 'dk-subscriptions-quota', order: 20,
         }, SidebarQuota));
-        ctx.slots.inject('settings.section', () => ctx.slots.register({
-          name: 'settings.section', id: 'subscriptions-lite', order: 55, label: () => t('title'),
+        ctx.slots.inject('settings.models.footer', () => ctx.slots.register({
+          name: 'settings.models.footer', id: 'dk-subscriptions-accounts', order: 10,
         }, Panel));
       },
     };

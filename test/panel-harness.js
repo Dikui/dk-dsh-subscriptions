@@ -39,7 +39,7 @@ export async function panelHarness({ fetch, open = () => null, clipboard, confir
     window: { __ModuleLoader__: { load(value) { declaration = value; } }, open, confirm },
   };
   const source = readFileSync(new URL('../client.js', import.meta.url), 'utf8');
-  const marker = '        function Panel({ close }) {';
+  const marker = '        function Panel({ close, embedded = close === undefined }) {';
   assert.equal(source.split(marker).length, 2);
   // Capture the real nested component only inside this VM; shipped code has no test exports.
   vm.runInNewContext(source.replace(marker, '        __capturePrompt(Prompt);\n        __captureSpeed(Speed);\n        __captureQuota(SidebarQuota);\n' + marker), sandbox);
@@ -51,7 +51,7 @@ export async function panelHarness({ fetch, open = () => null, clipboard, confir
       bind() { return key => dictionaries.get(language)?.[key] ?? key; },
       subscribe() { return () => {}; }, getSnapshot() { return localeSnapshot ?? { active: language, revision: 1 }; },
     },
-    slots: { inject(name, callback) { callback(); }, register(options, component) { if (options.name === 'sidebar.footer.action') SidebarQuota = component; else if (options.name === 'settings.section') Panel = component; } },
+    slots: { inject(name, callback) { callback(); }, register(options, component) { if (options.name === 'sidebar.footer.action') SidebarQuota = component; else if (options.name === 'settings.models.footer') Panel = component; } },
   });
   function render() {
     cursor = 0; pendingRender = false;

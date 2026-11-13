@@ -354,67 +354,21 @@ test('account model refresh replaces any registered vendor’s names without a m
   }
 });
 
-// small/spec — quota metadata never sends inference, and renders honest per-window percentages.
-test('quota cards display bilingual percentages, resets, freshness and manual metadata refresh', async () => {
+// small/spec — quota is shown only in the sidebar; subscription cards keep auth/model controls.
+test('subscription cards omit quota and keep auth and model controls', async () => {
   for (const language of ['en', 'zh']) {
-    const state = initialStatus(), posts = [];
-    const account = state.providers[0]; account.configured = true; account.credentialKind = 'grant';
-    account.quota = { source: 'account', state: 'partial', error: null, updatedAt: 1800000000000, stale: false,
-      windows: [{ id: 'primary', usedPercent: 25, windowSeconds: 18000, resetsAt: 1800000000000 },
-        { id: 'secondary', usedPercent: null, windowSeconds: null, resetsAt: null }] };
-    state.providers[2].quota = { source: 'none', state: 'unsupported', error: 'QUOTA_UNSUPPORTED', updatedAt: null, stale: false, windows: [] };
-    const panel = await panelHarness({ language, fetch: async (_path, options) => {
-      if (options.method === 'POST') { posts.push(JSON.parse(options.body)); account.quota.windows[0].usedPercent = 50; return Response.json({ ok: true }); }
-      return Response.json(state);
-    } });
-    try {
-      assert.match(panel.text(panel.within('OpenAI · ChatGPT')[0]), language === 'en' ? /75% remaining/ : /剩余 75%/);
-      assert.match(panel.text(), language === 'en' ? /5 h|5 hours/ : /5 小时/);
-      assert.match(panel.text(), language === 'en' ? /Resets/ : /重置/);
-      assert.match(panel.text(), language === 'en' ? /Unknown/ : /未知/);
-      assert.match(panel.text(), language === 'en' ? /Some quota details are unavailable/ : /部分额度信息不可用/);
-      assert.match(panel.text(), language === 'en' ? /Updated/ : /更新于/);
-      assert.match(panel.text(panel.within('Grok')[0]), language === 'en' ? /No verified OAuth quota endpoint/ : /没有已验证的 OAuth 额度接口/);
-      await panel.click(language === 'en' ? 'Refresh quota · no inference request' : '刷新额度 · 不发送推理请求', 'OpenAI · ChatGPT');
-      assert.deepEqual(posts, [{ action: 'quota', provider: 'openai-codex' }]);
-      assert.match(panel.text(), language === 'en' ? /50% remaining/ : /剩余 50%/);
-      assert.equal(panel.nodes().some(node => node.type === 'progress' && node.props.value == null), false);
-    } finally { panel.dispose(); }
-  }
-});
-
-test('quota errors and absent metadata keep auth and model controls available in both languages', async () => {
-  for (const language of ['en', 'zh']) {
-    const state = initialStatus(), account = state.providers[1];
-    account.configured = true; account.credentialKind = 'grant'; account.modelCatalog.state = 'ready';
-    account.models = [{ id: 'synthetic', name: 'Kimi Model' }];
-    account.quota = { source: 'account', state: 'error', error: 'QUOTA_DENIED', updatedAt: null, stale: false, windows: [] };
+    const state = initialStatus(), account = state.providers[0];
+    account.configured = true; account.credentialKind = 'grant';
+    account.modelCatalog.state = 'ready'; account.models = [{ id: 'remote-model', name: 'Remote Model' }];
+    account.quota = { source: 'account', state: 'ready', error: null, updatedAt: 1800000000000, stale: false,
+      windows: [{ id: 'primary', usedPercent: 25, windowSeconds: 18000, resetsAt: 1800000000000 }] };
     const panel = await panelHarness({ language, fetch: async () => Response.json(state) });
     try {
-      assert.match(panel.text(panel.within('Kimi Code')[0]), /401\/403/);
-      assert.equal(panel.button(language === 'en' ? 'Test selected model · uses quota' : '测试所选模型 · 消耗额度', 'Kimi Code').props.disabled, false);
-      assert.equal(panel.button(language === 'en' ? 'Reconnect' : '重新连接', 'Kimi Code').props.disabled, false);
-      assert.match(panel.text(panel.within('OpenAI · ChatGPT')[0]), language === 'en' ? /Quota unknown/ : /额度未知/);
-    } finally { panel.dispose(); }
-  }
-});
-
-test('malformed quota is rejected locally without hiding auth or the remote model catalog', async () => {
-  const valid = { source: 'account', state: 'ready', error: null, updatedAt: 1800000000000, stale: false,
-    windows: [{ id: 'primary', usedPercent: 25, windowSeconds: 18000, resetsAt: 1800000000000 }] };
-  for (const invalid of [null, {}, { ...valid, state: 'unlimited' }, { ...valid, stale: 'false' },
-    { ...valid, windows: [{ ...valid.windows[0], usedPercent: '' }] }, { ...valid, windows: [{ ...valid.windows[0], usedPercent: 101 }] },
-    { ...valid, windows: [{ ...valid.windows[0], resetsAt: -1 }] }, { ...valid, windows: [{ ...valid.windows[0], id: '<script>' }] },
-    { ...valid, windows: [valid.windows[0], valid.windows[0]] }, { ...valid, updatedAt: null },
-    { ...valid, windows: new Array(102).fill(valid.windows[0]) }, { ...valid, error: 'UPSTREAM-SECRET' }]) {
-    const state = initialStatus(), account = state.providers[0];
-    account.configured = true; account.credentialKind = 'grant'; account.modelCatalog.state = 'ready';
-    account.models = [{ id: 'remote-model', name: 'Remote Model' }]; account.quota = invalid;
-    const panel = await panelHarness({ fetch: async () => Response.json(state) });
-    try {
-      assert.match(panel.text(), /Quota metadata is missing or unsupported/);
-      assert.equal(panel.button('Test selected model · uses quota', 'OpenAI · ChatGPT').props.disabled, false);
-      assert.doesNotMatch(panel.text(), /UPSTREAM-SECRET/);
+      assert.doesNotMatch(panel.text(), language === 'en' ? /75% remaining/ : /剩余 75%/);
+      assert.doesNotMatch(panel.text(), language === 'en' ? /Refresh quota/ : /刷新额度/);
+      assert.equal(panel.nodes().some(node => node.type === 'progress'), false);
+      assert.equal(panel.button(language === 'en' ? 'Test selected model · uses quota' : '测试所选模型 · 消耗额度', 'OpenAI · ChatGPT').props.disabled, false);
+      assert.equal(panel.button(language === 'en' ? 'Reconnect' : '重新连接', 'OpenAI · ChatGPT').props.disabled, false);
     } finally { panel.dispose(); }
   }
 });

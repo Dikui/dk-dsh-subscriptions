@@ -4,3 +4,5 @@
       config:
         kimiDatasource: true
         grokXSearch: true
+        opencodeGoQuota: false
+        opencodeApiKeyRef: OPENCODE_GO_API_KEY

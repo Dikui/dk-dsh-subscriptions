@@ -1,5 +1,6 @@
+import { createHash } from 'node:crypto';
 import { fail } from './core.js';
-import { remoteSource } from './model-sources.js';
+import { catalogJson, remoteSource } from './model-sources.js';
 
 const percent = value => typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 100 ? value : null;
 const seconds = value => Number.isSafeInteger(value) && value > 0 ? value : null;
@@ -58,6 +59,59 @@ function kimiQuota(payload) {
   }
   if (!windows.length) fail('QUOTA_INVALID');
   return { windows, partial: partial || windows.some(window => window.usedPercent === null || window.resetsAt === null) };
+}
+
+function opencodeQuota(payload) {
+  const usage = payload?.usage;
+  if (!usage || typeof usage !== 'object' || Array.isArray(usage)) fail('QUOTA_INVALID');
+  const windows = [];
+  let partial = false;
+  for (const [id, key, windowSeconds] of [
+    ['limit_5h', 'rolling', 18000],
+    ['limit_7d', 'weekly', 604800],
+    ['limit_month_total', 'monthly', null],
+  ]) {
+    const row = usage[key];
+    if (row == null) { partial = true; continue; }
+    if (typeof row !== 'object' || Array.isArray(row)) { partial = true; continue; }
+    const usedPercent = percent(row.percent);
+    const resetsAt = isoTime(row.resetsAt);
+    if (usedPercent === null || resetsAt === null) partial = true;
+    windows.push({ id, usedPercent, windowSeconds, resetsAt });
+  }
+  if (!windows.length) fail('QUOTA_INVALID');
+  return { windows, partial };
+}
+
+const opencodeIdentity = key => createHash('sha256').update(`dk-subscriptions:opencode-go-quota:${key}`).digest('hex');
+
+// The API key is both the credential and the account identity. Hash it before
+// it reaches the shared metadata cache; raw keys never enter status or errors.
+export function opencodeGoQuotaSource({ readKey, fetchCatalog }) {
+  return {
+    scope: 'account',
+    async readIdentity(signal) {
+      const key = await readKey(signal);
+      return typeof key === 'string' && key ? opencodeIdentity(key) : undefined;
+    },
+    async resolveIdentity(signal) {
+      const key = await readKey(signal);
+      return typeof key === 'string' && key ? opencodeIdentity(key) : undefined;
+    },
+    async loadModels({ identity, signal }) {
+      const key = await readKey(signal);
+      if (typeof key !== 'string' || !key) fail('MISSING_CREDENTIAL');
+      if (opencodeIdentity(key) !== identity) fail('QUOTA_CHANGED');
+      const response = await fetchCatalog('https://opencode.ai/zen/go/v1/usage', { method: 'GET', redirect: 'error', signal,
+        headers: { authorization: `Bearer ${key}`, accept: 'application/json' } });
+      if (!response.ok) {
+        await response.body?.cancel();
+        fail([401, 403].includes(response.status) ? 'QUOTA_DENIED'
+          : response.status === 429 ? 'QUOTA_RATE_LIMIT' : 'QUOTA_FAILED');
+      }
+      return opencodeQuota(await catalogJson(response, 'QUOTA'));
+    },
+  };
 }
 
 export const accountQuotaSources = new Map([

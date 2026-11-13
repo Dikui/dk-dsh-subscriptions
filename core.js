@@ -6,6 +6,12 @@ export const PROVIDERS = Object.freeze([
   { id: 'xai', name: 'Grok', route: 'subscription-xai' },
 ]);
 
+// Quota-only entries never get a settings card, route or login flow. They exist
+// so the sidebar can read one explicitly enabled API-key subscription.
+export const QUOTA_ONLY_PROVIDERS = Object.freeze([
+  { id: 'opencode-go', name: 'OpenCode Go' },
+]);
+
 export class SubscriptionError extends Error {
   constructor(code) { super(code); this.code = code; }
 }
@@ -109,7 +115,7 @@ function safeNotice(notice) {
   return result;
 }
 
-export function createSubscriptions({ authorization, credentials, llm, catalog, keyFor, accountModels = new Map(), accountQuotas = new Map(), vendorTools, timeoutMs = 15 * 60 * 1000 }) {
+export function createSubscriptions({ authorization, credentials, llm, catalog, keyFor, accountModels = new Map(), accountQuotas = new Map(), vendorTools, readQuotaKey, timeoutMs = 15 * 60 * 1000 }) {
   let disposed = false;
   const attempts = new Map();
   const tests = new Map();
@@ -117,9 +123,25 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
   const supported = new Set(catalog.filter(p => p.auth?.oauth).map(p => p.id));
   function provider(id) {
     const p = PROVIDERS.find(item => item.id === id);
-    if (!p) fail('UNKNOWN_PROVIDER');
-    if (!p.route || !supported.has(p.id)) fail('UNAVAILABLE');
+    if (p) {
+      if (!p.route || !supported.has(p.id)) fail('UNAVAILABLE');
+      return p;
+    }
+    const quotaOnly = QUOTA_ONLY_PROVIDERS.find(item => item.id === id);
+    if (quotaOnly) return { ...quotaOnly, route: null, quotaOnly: true };
+    fail('UNKNOWN_PROVIDER');
+  }
+  function authProvider(id) {
+    const p = provider(id);
+    if (p.quotaOnly) fail('UNAVAILABLE');
     return p;
+  }
+  async function configured(id, signal) {
+    if (QUOTA_ONLY_PROVIDERS.some(p => p.id === id)) {
+      if (!readQuotaKey) return false;
+      return !!(await readQuotaKey(id, signal));
+    }
+    return !!oauthRecord(await credentials.readRecord(keyFor(id)));
   }
   function active(id, attemptId) {
     const attempt = attempts.get(id);
@@ -157,9 +179,7 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     const quota = accountQuotas.get(id);
     if (!quota) return unsupportedQuota();
     if (disposed || signal?.aborted) return quota.status();
-    const record = await credentials.readRecord(keyFor(id));
-    if (disposed || signal?.aborted) return quota.status();
-    if (!oauthRecord(record) || attempts.get(id)?.state === 'running' || loggingOut.has(id)) {
+    if (!(await configured(id, signal)) || attempts.get(id)?.state === 'running' || loggingOut.has(id)) {
       quota.clear();
       return quota.status();
     }
@@ -170,19 +190,18 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
   // Narrow read for the composer badge: no catalog, auth attempt or account identity.
   async function quotaState(id, signal) {
     provider(id);
-    const configured = !!oauthRecord(await credentials.readRecord(keyFor(id)));
-    return { provider: id, configured, quota: await quotaStatus(id, signal) };
+    const isConfigured = await configured(id, signal);
+    return { provider: id, configured: isConfigured, quota: await quotaStatus(id, signal) };
   }
   async function refreshQuota(id, signal) {
     provider(id);
     if (disposed) fail('UNAVAILABLE');
     signal?.throwIfAborted();
     if (!accountQuotas.has(id)) fail('QUOTA_UNSUPPORTED');
-    const record = await credentials.readRecord(keyFor(id));
+    if (!(await configured(id, signal))) fail('MISSING_CREDENTIAL');
     if (disposed) fail('UNAVAILABLE');
     signal?.throwIfAborted();
     if (loggingOut.has(id) || tests.has(id) || attempts.get(id)?.state === 'running') fail('ALREADY_IN_FLIGHT');
-    if (!oauthRecord(record)) fail('MISSING_CREDENTIAL');
     await accountQuotas.get(id).ensure({ force: true, signal });
     return { ok: true };
   }
@@ -216,7 +235,7 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     })) };
   }
   async function refreshModels(id, signal) {
-    provider(id);
+    authProvider(id);
     if (!accountModels.has(id)) fail('MODEL_CATALOG_UNAVAILABLE');
     if (loggingOut.has(id) || tests.has(id) || attempts.get(id)?.state === 'running') fail('ALREADY_IN_FLIGHT');
     if (!oauthRecord(await credentials.readRecord(keyFor(id)))) fail('MISSING_CREDENTIAL');
@@ -224,7 +243,7 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     return { ok: true };
   }
   function login(id) {
-    provider(id);
+    authProvider(id);
     const key = keyFor(id);
     const flow = authorization.describe(key);
     if (!flow?.methods.some(method => method.id === 'oauth')) fail('UNAVAILABLE');
@@ -258,14 +277,14 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     return publicAttempt(attempt);
   }
   async function cancel(id, attemptId) {
-    provider(id);
+    authProvider(id);
     const attempt = active(id, attemptId);
     attempt.controller.abort();
     await attempt.done;
     return { ok: true };
   }
   function answer(id, attemptId, promptId, value) {
-    provider(id);
+    authProvider(id);
     const attempt = active(id, attemptId);
     if (!attempt.prompt || attempt.prompt.view.id !== promptId) fail('STALE_PROMPT');
     if (typeof value !== 'string' || value.length > 16384) fail('INVALID_ANSWER');
@@ -275,7 +294,7 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     return { ok: true };
   }
   async function logout(id) {
-    provider(id);
+    authProvider(id);
     if (loggingOut.has(id)) fail('ALREADY_IN_FLIGHT');
     if (tests.has(id)) fail('TEST_IN_PROGRESS');
     loggingOut.add(id); // Reserve before the first await; do not orphan a newer login.
@@ -298,7 +317,7 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     } finally { loggingOut.delete(id); }
   }
   async function test(id, model, signal) {
-    const p = provider(id);
+    const p = authProvider(id);
     if (loggingOut.has(id) || attempts.get(id)?.state === 'running') fail('ALREADY_IN_FLIGHT');
     if (tests.has(id)) fail('TEST_IN_PROGRESS');
     const controller = new AbortController();

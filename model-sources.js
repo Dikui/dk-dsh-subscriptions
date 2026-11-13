@@ -121,7 +121,7 @@ function fingerprint(credential) {
 }
 
 // Bound both declared and streamed bytes before parsing untrusted metadata.
-async function catalogJson(response, errorPrefix = 'MODEL_CATALOG') {
+export async function catalogJson(response, errorPrefix = 'MODEL_CATALOG') {
   const limit = 1024 * 1024;
   const length = Number(response.headers.get('content-length'));
   if (Number.isFinite(length) && length > limit) { await response.body?.cancel(); fail(`${errorPrefix}_INVALID`); }
