@@ -1,10 +1,14 @@
 {
   "name": "dk-subscriptions",
-  "version": "0.1.21",
+  "version": "0.0.1",
   "private": true,
   "type": "module",
   "description": "Minimal isolated OAuth connections for coding subscriptions in DeepSeek Harness",
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Dikui/dk-subscriptions.git"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",

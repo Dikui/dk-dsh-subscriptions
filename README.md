@@ -2,6 +2,10 @@
 
 一个独立的、非官方订阅连接插件。复用 DeepSeek Harness 自带的 `@deepseek-ai/dsh-llm-pi-ai` OAuth、消息转换和推理协议；OpenAI、Kimi、Grok 共用远端模型目录自动同步，不再使用 SDK 静态目录充当可选模型列表。不复制 OAuth 协议，不修改 DSH 核心，不替换已有订阅插件。
 
+## 版本序列
+
+当前版本 **0.0.1** 是独立管理后的版本序列起点，保留此前 0.1.21 的全部功能和 Git 历史，不改变已有工具、凭据或模型路由标识，也不改变 DSH 兼容范围。下文的 0.1.x 版本记录均为重置前的历史；仓库继续使用 [Dikui/dk-subscriptions](https://github.com/Dikui/dk-subscriptions) 的 `main` 分支。
+
 ## 首版范围
 
 | 厂商 | 接入范围 | 模型路由 |
