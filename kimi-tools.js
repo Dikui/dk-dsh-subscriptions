@@ -78,7 +78,7 @@ export function createKimiTools({ getAuth, fetchTool, attachments, version, sign
         const response = await fetchTool(endpoint, {
           method: 'POST', redirect: 'error', signal,
           headers: { Authorization: `Bearer ${bearer[1]}`, 'Content-Type': 'application/json', Accept: 'application/json',
-            'User-Agent': `dk-subscriptions/${version}`, 'X-Msh-Platform': 'dk-subscriptions',
+            'User-Agent': `dk-dsh-subscriptions/${version}`, 'X-Msh-Platform': 'dk-dsh-subscriptions',
             'X-Msh-Version': version, 'X-Msh-Tool-Call-Id': callId },
           body,
         });

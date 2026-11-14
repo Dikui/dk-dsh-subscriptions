@@ -83,7 +83,7 @@ function opencodeQuota(payload) {
   return { windows, partial };
 }
 
-const opencodeIdentity = key => createHash('sha256').update(`dk-subscriptions:opencode-go-quota:${key}`).digest('hex');
+const opencodeIdentity = key => createHash('sha256').update(`dk-dsh-subscriptions:opencode-go-quota:${key}`).digest('hex');
 
 // The API key is both the credential and the account identity. Hash it before
 // it reaches the shared metadata cache; raw keys never enter status or errors.

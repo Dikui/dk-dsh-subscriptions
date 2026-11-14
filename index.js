@@ -13,7 +13,7 @@ import { createSpeedHost } from './speed-host.js';
 import { withSpeedPayload } from './speed.js';
 import packageInfo from './package.json' with { type: 'json' };
 
-export const name = 'dk-subscriptions';
+export const name = 'dk-dsh-subscriptions';
 export const inject = ['authorization', 'credentials', 'llm', 'connection', 'tools'];
 
 export async function apply(ctx, { kimiDatasource = false, grokXSearch = false, opencodeGoQuota = false,
@@ -102,7 +102,7 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false, 
     const credential = await bindings.auth.credentials.read(provider);
     if (!credential) fail('MISSING_CREDENTIAL');
     const identity = credential.accountId ?? credential.subject ?? credential.refresh ?? credential.access;
-    const speedAccount = createHash('sha256').update(`dk-subscriptions:speed:${identity}`).digest('hex');
+    const speedAccount = createHash('sha256').update(`dk-dsh-subscriptions:speed:${identity}`).digest('hex');
     return { ...descriptor, speedAccount };
   }
   class SubscriptionAdapter extends PiAiAdapter {
@@ -191,7 +191,7 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false, 
     requestBody: 'buffered', fetch: createHttpHandler(api) });
   ctx.tools.register({
     name: 'subscription_accounts',
-    description: 'Inspect subscription status, remote model catalogs and official quota metadata for OpenAI and Kimi (Grok quota is unsupported), force a metadata refresh, test a selected model, or clear local OAuth secrets. Status may query model/quota metadata with shared official OAuth and refresh expired tokens, but never sends inference. Catalog scope distinguishes account metadata from the Grok vendor catalog; neither proves model access or subscription-only billing. No static catalog or API-key fallback. Never starts or completes login: the user authorizes in Settings → dk-subscriptions. Tests consume quota and Grok may incur extra charges. Logout signs out the shared official pi-ai route locally, without cancelling a plan or revoking the account remotely.',
+    description: 'Inspect subscription status, remote model catalogs and official quota metadata for OpenAI and Kimi (Grok quota is unsupported), force a metadata refresh, test a selected model, or clear local OAuth secrets. Status may query model/quota metadata with shared official OAuth and refresh expired tokens, but never sends inference. Catalog scope distinguishes account metadata from the Grok vendor catalog; neither proves model access or subscription-only billing. No static catalog or API-key fallback. Never starts or completes login: the user authorizes in Settings → dk-dsh-subscriptions. Tests consume quota and Grok may incur extra charges. Logout signs out the shared official pi-ai route locally, without cancelling a plan or revoking the account remotely.',
     parameters: {
       type: 'object', properties: {
         action: { type: 'string', enum: ['status', 'models', 'quota', 'test', 'logout'], description: 'status automatically synchronizes remote model/quota metadata when stale. models or quota forces that metadata refresh for the selected provider. None sends inference; catalog results are not entitlement verification. test sends a small coding prompt. logout removes the shared local OAuth grant only.' },

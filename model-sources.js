@@ -116,7 +116,7 @@ async function grokModels(value, baseline, { query }) {
 }
 function fingerprint(credential) {
   if (credential?.type !== 'oauth' || typeof credential.access !== 'string' || !credential.access) return undefined;
-  return createHash('sha256').update(JSON.stringify(['dk-subscriptions:catalog',
+  return createHash('sha256').update(JSON.stringify(['dk-dsh-subscriptions:catalog',
     credential.accountId, credential.subject, credential.refresh, credential.access])).digest('hex');
 }
 
@@ -180,7 +180,7 @@ const openAICodexModels = remoteSource({
     return { 'chatgpt-account-id': credential.accountId, originator: 'pi' };
   },
   normalize: (payload, baseline, { credential }) => {
-    const speedAccount = createHash('sha256').update(`dk-subscriptions:speed:${credential.accountId}`).digest('hex');
+    const speedAccount = createHash('sha256').update(`dk-dsh-subscriptions:speed:${credential.accountId}`).digest('hex');
     return codexModels(payload, baseline).map(model => ({ ...model, speedAccount }));
   },
 });

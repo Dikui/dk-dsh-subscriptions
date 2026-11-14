@@ -1,5 +1,5 @@
 {
-  "name": "dk-subscriptions",
+  "name": "dk-dsh-subscriptions",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Dikui/dk-subscriptions.git"
+    "url": "git+https://github.com/Dikui/dk-dsh-subscriptions.git"
   },
   "exports": {
     ".": "./index.js",

@@ -1,6 +1,6 @@
 - insert:
     - id: subscriptions-lite
-      name: 'dk-subscriptions'
+      name: 'dk-dsh-subscriptions'
       config:
         kimiDatasource: true
         grokXSearch: true

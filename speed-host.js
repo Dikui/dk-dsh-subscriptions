@@ -18,7 +18,7 @@ export async function createSpeedHost(ctx, { adapterUrl, modelFor, isConversatio
   const key = id => createHash('sha256').update(id).digest('hex');
   // Remembered tier lives in the same table under a reserved id, so the domain
   // schema stays v1 and per-session records keep their exact shape.
-  const lastId = provider => `dk-subscriptions:speed-last:${provider}`;
+  const lastId = provider => `dk-dsh-subscriptions:speed-last:${provider}`;
   const selections = createSpeedSelections({
     read(id) { const value = table.get(key(id)); return value?.sessionId === id ? value : undefined; },
     write: (id, value) => table.put(key(id), { sessionId: id, ...value }),

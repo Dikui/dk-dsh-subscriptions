@@ -1,9 +1,9 @@
 window.__ModuleLoader__.load({
-  id: 'dk-subscriptions',
+  id: 'dk-dsh-subscriptions',
   factory(require) {
     const React = require('react');
     const h = React.createElement;
-    const namespace = 'dk-subscriptions';
+    const namespace = 'dk-dsh-subscriptions';
     const messages = {
       en: {
         title: 'Subscriptions', intro: 'Manage subscription accounts and data tools used by model access.', navigation: 'Subscription pages', modelsPage: 'Model connections', toolsPage: 'Data tools',
@@ -793,14 +793,14 @@ window.__ModuleLoader__.load({
             } };
           };
           scope.slots.inject('conversation.input.right', () => scope.slots.register({
-            name: 'conversation.input.right', id: 'dk-subscriptions-speed', order: 90, inject,
+            name: 'conversation.input.right', id: 'dk-dsh-subscriptions-speed', order: 90, inject,
           }, Speed));
         });
         ctx.slots.inject('sidebar.footer.action', () => ctx.slots.register({
-          name: 'sidebar.footer.action', id: 'dk-subscriptions-quota', order: 20,
+          name: 'sidebar.footer.action', id: 'dk-dsh-subscriptions-quota', order: 20,
         }, SidebarQuota));
         ctx.slots.inject('settings.models.footer', () => ctx.slots.register({
-          name: 'settings.models.footer', id: 'dk-subscriptions-accounts', order: 10,
+          name: 'settings.models.footer', id: 'dk-dsh-subscriptions-accounts', order: 10,
         }, Panel));
       },
     };

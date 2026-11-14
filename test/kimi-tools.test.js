@@ -61,8 +61,8 @@ test('two independent RPC methods use fresh OAuth headers and retain complete re
     assert.equal(request.redirect, 'error');
     assert.ok(request.signal instanceof AbortSignal);
     assert.equal(request.headers.Authorization, `Bearer SYNTHETIC-KIMI-${i ? 'ROTATED' : 'FIRST'}`);
-    assert.equal(request.headers['User-Agent'], 'dk-subscriptions/9.8.7');
-    assert.equal(request.headers['X-Msh-Platform'], 'dk-subscriptions');
+    assert.equal(request.headers['User-Agent'], 'dk-dsh-subscriptions/9.8.7');
+    assert.equal(request.headers['X-Msh-Platform'], 'dk-dsh-subscriptions');
     assert.equal(request.headers['X-Msh-Version'], '9.8.7');
     assert.match(request.headers['X-Msh-Tool-Call-Id'], /^[a-f\d-]{36}$/);
     assert.deepEqual(JSON.parse(request.body), { method: i ? 'call_data_source_tool' : 'get_data_source_desc', params: i ? query : desc });

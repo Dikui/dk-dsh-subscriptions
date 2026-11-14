@@ -1,10 +1,10 @@
-# dk-subscriptions
+# dk-dsh-subscriptions
 
 一个独立的、非官方订阅连接插件。复用 DeepSeek Harness 自带的 `@deepseek-ai/dsh-llm-pi-ai` OAuth、消息转换和推理协议；OpenAI、Kimi、Grok 共用远端模型目录自动同步，不再使用 SDK 静态目录充当可选模型列表。不复制 OAuth 协议，不修改 DSH 核心，不替换已有订阅插件。
 
 ## 版本序列
 
-当前版本 **0.0.1** 是独立管理后的版本序列起点，保留此前 0.1.21 的全部功能和 Git 历史，不改变已有工具、凭据或模型路由标识，也不改变 DSH 兼容范围。下文的 0.1.x 版本记录均为重置前的历史；仓库继续使用 [Dikui/dk-subscriptions](https://github.com/Dikui/dk-subscriptions) 的 `main` 分支。
+当前版本 **0.0.1** 是独立管理后的版本序列起点，保留此前 0.1.21 的全部功能和 Git 历史，不改变已有工具、凭据或模型路由标识，也不改变 DSH 兼容范围。项目与包名由 `dk-subscriptions` 改为 `dk-dsh-subscriptions`；模型路由、工具名和 OAuth 凭证均不变。下文的 0.1.x 版本记录均为重置前的历史；仓库继续使用 [Dikui/dk-dsh-subscriptions](https://github.com/Dikui/dk-dsh-subscriptions) 的 `main` 分支。
 
 ## 首版范围
 
@@ -21,7 +21,7 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 ## 使用
 
 1. 在 DSH 安装本目录作为本地 bundle（由 `plugin_manager install_bundle` 完成，勿直接改 profile）。
-2. 打开 **设置 → dk-subscriptions → 模型接入**，选择 OpenAI、Kimi 或 Grok 登录。**数据工具**是独立子页，两类内容不会同时显示。Grok 需要当前官方 SDK 提供 xAI OAuth；旧 SDK 不支持时保持不可用。
+2. 打开 **设置 → dk-dsh-subscriptions → 模型接入**，选择 OpenAI、Kimi 或 Grok 登录。**数据工具**是独立子页，两类内容不会同时显示。Grok 需要当前官方 SDK 提供 xAI OAuth；旧 SDK 不支持时保持不可用。
 3. 点击连接会先打开等待页，取得官方授权链接后跳转。若弹窗受限，可直接点击面板里的 **打开官方授权页面**，或 **复制授权链接** 到浏览器，再使用显示的授权码。由用户确认账户和授权；插件及代理工具不代填账号密码、不代点授权同意。
 4. 三个厂商均在已登录启动、授权完成及读取模型列表时自动同步；60 秒内复用缓存，后续访问自动重查。也可点击 **刷新模型目录 · 不发送推理请求** 强制更新。新模型无需手工添加或等待 SDK 名单更新。另行点击模型测试并确认后才会发送很短的编码问题，**消耗额度；Grok 还可能额外收费**。
 5. 主会话的模型选择器使用上表的独立路由。已有其他插件的路由保持不变。
@@ -38,13 +38,13 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 
 OpenCode Go 的用量来自官方客户端使用的 `GET https://opencode.ai/zen/go/v1/usage`：Console API key 直接作为 Bearer，不需要 workspace/org header，返回 `rolling`、`weekly`、`monthly` 三个百分比窗口。该端点来自官方客户端实现，不是公开文档承诺的稳定接口；变更时只影响额度显示，不影响推理。
 
-默认关闭。在插件配置中设置 `opencodeGoQuota: true`，并用 `opencodeApiKeyRef` 指定凭证引用（默认 `OPENCODE_GO_API_KEY`）后，侧边栏仪表会把它作为一个额度来源列出；Models 页和订阅账号面板都不显示额度。设置页不增加第四张卡，`status()` 仍只返回三个 OAuth 路由。插件只解析该引用，用 key 的 SHA-256 做账号隔离，不记录或返回 key；查询不发送推理，不回退其他凭证。关闭时完全不读取 API key。修改配置后需完全退出并重启 DSH。手动编辑 profile 的 `cordis.patch.yml` 时，覆盖块的 `id` 必须是 `subscriptions-lite`（bundle 插入的 id），不是插件名 `dsh-subscriptions`；否则 DSH 会忽略该块。
+默认关闭。在插件配置中设置 `opencodeGoQuota: true`，并用 `opencodeApiKeyRef` 指定凭证引用（默认 `OPENCODE_GO_API_KEY`）后，侧边栏仪表会把它作为一个额度来源列出；Models 页和订阅账号面板都不显示额度。设置页不增加第四张卡，`status()` 仍只返回三个 OAuth 路由。插件只解析该引用，用 key 的 SHA-256 做账号隔离，不记录或返回 key；查询不发送推理，不回退其他凭证。关闭时完全不读取 API key。修改配置后需完全退出并重启 DSH。手动编辑 profile 的 `cordis.patch.yml` 时，覆盖块的 `id` 必须是 `subscriptions-lite`（bundle 插入的 id），不是包名 `dk-dsh-subscriptions`；否则 DSH 会忽略该块。
 
 来源：[OpenAI usage 请求](https://github.com/openai/codex/blob/main/codex-rs/backend-client/src/client/rate_limit_resets.rs)、[窗口结构](https://github.com/openai/codex/blob/main/codex-rs/codex-backend-openapi-models/src/models/rate_limit_window_snapshot.rs)、[Kimi 当前结构](https://github.com/MoonshotAI/kimi-code/blob/eb2035f3cad57cc12d4d5082ec626f7f0ea5f651/packages/oauth/src/managed-usage.ts)、[Kimi 旧结构](https://github.com/MoonshotAI/kimi-cli/blob/main/src/kimi_cli/ui/shell/usage.py)、[OpenCode Go 文档](https://opencode.ai/docs/go/)。验证只使用合成凭证和模拟网络；OpenCode 端点另用现有 key 做过一次只读 GET，未在已安装 GUI 中验证显示。
 
 ## Kimi 数据工具（显式启用）
 
-打开 **设置 → dk-subscriptions → 数据工具**。页面只保留标题、状态和必要操作，费用提示收进默认关闭的 **费用说明**。未连接时点击 **前往连接** 返回模型接入页，不会自动开始授权；切换子页不打断授权，也不发送查询。
+打开 **设置 → dk-dsh-subscriptions → 数据工具**。页面只保留标题、状态和必要操作，费用提示收进默认关闭的 **费用说明**。未连接时点击 **前往连接** 返回模型接入页，不会自动开始授权；切换子页不打断授权，也不发送查询。
 
 在聊天中可以这样提问：**用 Kimi 世界银行数据查询中国最近五个有数据年份的 GDP，列成表格并注明单位与来源。** 这不是“只读说明”的功能限制，也不要求当前模型是 Kimi；实际调用仍需确认可能产生的额度或余额消耗。
 
@@ -133,7 +133,7 @@ OpenCode Go 的用量来自官方客户端使用的 `GET https://opencode.ai/zen
 
 ## 名称变更
 
-界面显示名称为 `Subscriptions`，包名保持 `dk-subscriptions`，GitHub 仓库为 [Dikui/dk-subscriptions](https://github.com/Dikui/dk-subscriptions)。改名不迁移或删除 OAuth 凭证，不改变现有模型路由；内部插件 id、HTTP 路径和请求头保留兼容名称，以免影响已有调用。
+界面显示名称为 `Subscriptions`；项目、包名和 GitHub 仓库现为 `dk-dsh-subscriptions`（[Dikui/dk-dsh-subscriptions](https://github.com/Dikui/dk-dsh-subscriptions)），此前为 `dk-subscriptions`。改名不迁移或删除 OAuth 凭证，不改变模型路由、数据工具名称或计费方式；内部插件 id `subscriptions-lite`、HTTP 路径 `/api/subscriptions-lite`、请求头 `x-subscriptions-lite` 和 CSS 前缀保留兼容名称，以免影响已有调用。目录名变化后，已安装的本地链接需在插件管理器中重新安装。
 
 ## 开发与验证
 
