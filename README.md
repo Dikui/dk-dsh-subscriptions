@@ -4,7 +4,7 @@
 
 ## 版本序列
 
-当前版本 **0.0.2**，0.0.1 是独立管理后的版本序列起点；本次升版只调整本地推送规则，保留此前 0.1.21 的全部功能和 Git 历史，不改变已有工具、凭据或模型路由标识，也不改变 DSH 兼容范围。项目与包名由 `dk-subscriptions` 改为 `dk-dsh-subscriptions`；模型路由、工具名和 OAuth 凭证均不变。下文的 0.1.x 版本记录均为重置前的历史；仓库继续使用 [Dikui/dk-dsh-subscriptions](https://github.com/Dikui/dk-dsh-subscriptions) 的 `main` 分支。
+当前版本 **0.0.3**，0.0.1 是独立管理后的版本序列起点；0.0.2 补默认升版规则，0.0.3 将规则文件纳入仓库，保留此前 0.1.21 的全部功能和 Git 历史，不改变已有工具、凭据或模型路由标识，也不改变 DSH 兼容范围。项目与包名由 `dk-subscriptions` 改为 `dk-dsh-subscriptions`；模型路由、工具名和 OAuth 凭证均不变。下文的 0.1.x 版本记录均为重置前的历史；仓库继续使用 [Dikui/dk-dsh-subscriptions](https://github.com/Dikui/dk-dsh-subscriptions) 的 `main` 分支。
 
 ## 首版范围
 
