@@ -25,6 +25,7 @@
     "quota-sources.js",
     "speed.js",
     "speed-host.js",
+    "vendor-skills.js",
     "kimi-tools.js",
     "grok-tools.js",
     "client.js",
@@ -36,7 +37,7 @@
   ],
   "scripts": {
     "test": "node --test test/*.test.js",
-    "check": "node --check index.js && node --check core.js && node --check network.js && node --check models.js && node --check model-sources.js && node --check quota-sources.js && node --check speed.js && node --check speed-host.js && node --check kimi-tools.js && node --check grok-tools.js && node --check client.js"
+    "check": "node --check index.js && node --check core.js && node --check network.js && node --check models.js && node --check model-sources.js && node --check quota-sources.js && node --check speed.js && node --check speed-host.js && node --check vendor-skills.js && node --check kimi-tools.js && node --check grok-tools.js && node --check client.js"
   },
   "engines": {
     "node": ">=22.14",

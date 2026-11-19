@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import * as module from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { zstdDecompressSync } from 'node:zlib';
+import { vendorSkillHost } from './vendor-skill-host.js';
 
 const require = module.createRequire(import.meta.url);
 let undici, adapterEntry;
@@ -124,8 +125,8 @@ test('registered subscription routes use the same remote catalogs and native OAu
     }
     assert.equal(calls().length, before + count, `${label}: startup metadata warmup did not settle`);
   }
-  async function mount({ ids = [], expired = false, config = {} } = {}) {
-    const records = new Map(), tools = new Map(), saved = [];
+  async function mount({ ids = [], expired = false, config = {}, host } = {}) {
+    const records = new Map(), saved = [];
     let adapter, settingsFetch;
     for (const id of ids) records.set(native.recordKeyFor(id), { kind: 'grant', payload: {
       type: 'oauth', access: accessFor(id), refresh: `SYNTHETIC-REFRESH-${id}`,
@@ -156,7 +157,7 @@ test('registered subscription routes use the same remote catalogs and native OAu
       get: () => ({ async saveFile(value) { saved.push(value); return { attachmentId: 'SYNTHETIC-REF', name: value.name, bytes: value.data.length }; } }),
       authorization: { describe: () => ({ methods: [{ id: 'oauth' }] }), begin: () => assert.fail('No login in offline tests') },
       llm, connection: { fetch: { register({ fetch }) { settingsFetch = fetch; } } },
-      tools: { register: value => tools.set(value.name, value) },
+      ...(host && { tools: host.ctx.tools, inject: (...args) => host.ctx.inject(...args) }),
     }, config);
     adapter.config.profiles().get('subscription-openai-codex').transport = 'sse';
     async function settings(body, expectedStatus = 200) {
@@ -166,7 +167,12 @@ test('registered subscription routes use the same remote catalogs and native OAu
       assert.equal(response.status, expectedStatus);
       return response.json();
     }
-    return { adapter, records, credentials, tools, saved, settings };
+    return { adapter, records, saved, settings };
+  }
+  async function chatHost(options) {
+    const host = await vendorSkillHost(module.createRequire(adapterEntry), options);
+    dispose.push(host.close);
+    return host;
   }
   function inference(vendor, captured, { access = accessFor(vendor.id), times = 1 } = {}) {
     const [origin, path] = vendor.id === 'openai-codex' ? ['https://chatgpt.com', '/backend-api/codex/responses']
@@ -186,9 +192,19 @@ test('registered subscription routes use the same remote catalogs and native OAu
   }
   try {
     native = await import(pathToFileURL(adapterEntry).href);
-    await t.test('only vendor data tools are registered for chat', async () => {
-      const { tools } = await mount();
-      assert.deepEqual([...tools.keys()].sort(), ['grok_x_search', 'kimi_call_data_source_tool', 'kimi_get_data_source_desc']);
+    // small/spec — vendor skill opt-in matrix, observed at the actual catalog and step boundary.
+    for (const [kimiDatasource, grokXSearch, names] of [
+      [false, false, []], [true, false, ['kimi-datasource']], [false, true, ['grok-x-search']],
+      [true, true, ['grok-x-search', 'kimi-datasource']],
+    ]) await t.test(`skill catalog reflects Kimi=${kimiDatasource}, Grok=${grokXSearch} without admitting tools`, async () => {
+      const host = await chatHost();
+      const { settings } = await mount({ host, config: { kimiDatasource, grokXSearch } });
+      assert.deepEqual((await host.ctx.skills.list()).map(skill => skill.name), names);
+      assert.deepEqual([...(await host.nextTools(host.sessionAgent('new'))).keys()], []);
+      const state = await settings();
+      assert.equal(state.vendorTools.kimiDatasource.enabled, kimiDatasource);
+      assert.equal(state.vendorTools.grokXSearch.enabled, grokXSearch);
+      assert.deepEqual(calls(), []);
     });
     let runtime;
     await t.test('already-authorized startup warms all three real metadata sources without inference', async () => {
@@ -417,17 +433,16 @@ test('registered subscription routes use the same remote catalogs and native OAu
       assert.equal(calls().filter(([method, origin]) => method === 'POST' && origin.startsWith('https://auth.')).length, 3);
       agent.assertNoPendingInterceptors();
     });
-    await t.test('disabled Datasource and X Search gates never read credentials or make HTTP requests', async () => {
+    await t.test('hosts without conditional dispatch keep settings and all model routes, not vendor skills', async () => {
       agent.clearCallHistory();
-      const gated = await mount();
-      gated.records.set(native.recordKeyFor('kimi-coding'), { kind: 'grant', payload: {
-        type: 'oauth', access: 'SYNTHETIC-EXPIRED', refresh: 'SYNTHETIC-REFRESH', expires: 0,
-      } });
-      gated.credentials.readRecord = gated.credentials.modifyRecord = () => assert.fail('Disabled vendor tools must not touch credentials');
-      for (const name of ['kimi_get_data_source_desc', 'kimi_call_data_source_tool']) {
-        assert.deepEqual(await gated.tools.get(name).execute({}, exec), { error: 'KIMI_DATASOURCE_DISABLED' });
+      for (const host of [undefined, await chatHost({ withAgents: false }), await chatHost({ legacy: true })]) {
+        const { settings } = await mount({ host, config: { kimiDatasource: true, grokXSearch: true } });
+        const state = await settings();
+        assert.deepEqual(state.providers.map(p => p.route).sort(), vendors.map(v => v.route).sort());
+        assert.equal(state.vendorTools.kimiDatasource.enabled, false);
+        assert.equal(state.vendorTools.grokXSearch.enabled, false);
+        if (host) assert.deepEqual(await host.ctx.skills.list(), []);
       }
-      assert.deepEqual(await gated.tools.get('grok_x_search').execute({}, exec), { error: 'GROK_X_SEARCH_DISABLED' });
       assert.deepEqual(calls(), []);
     });
     await t.test('Datasource opt-in status permits metadata GETs but never probes paid tools or model inference', async () => {
@@ -435,7 +450,8 @@ test('registered subscription routes use the same remote catalogs and native OAu
       const { apply } = await import('../index.js');
       await assert.rejects(apply({}, { kimiDatasource: 'true' }), /kimiDatasource must be a boolean/);
       metadata('kimi-coding');
-      const enabled = await mount({ ids: ['kimi-coding'], config: { kimiDatasource: true } });
+      const host = await chatHost(), caller = host.sessionAgent('kimi');
+      const enabled = await mount({ host, ids: ['kimi-coding'], config: { kimiDatasource: true } });
       await waitForWarmup(0, 2, 'Kimi datasource');
       const state = await enabled.settings();
       assert.deepEqual(state.vendorTools.kimiDatasource, { enabled: true, reason: null });
@@ -445,7 +461,9 @@ test('registered subscription routes use the same remote catalogs and native OAu
         headers: { authorization: `Bearer ${accessFor('kimi-coding')}` } }).reply(200, async ({ body }) => {
         requestBody = JSON.parse(await new Response(body).text()); return JSON.stringify('Synthetic source documentation');
       }, { headers: { 'content-type': 'application/json' } });
-      const result = await enabled.tools.get('kimi_get_data_source_desc').execute({ name: 'world_bank_open_data' }, exec);
+      host.modelLoad(caller, await host.ctx.skills.get('kimi-datasource'));
+      assert.deepEqual(inferenceCalls(), [], 'skill loading is not a paid lookup');
+      const result = await (await host.nextTools(caller)).get('kimi_get_data_source_desc').execute({ name: 'world_bank_open_data' }, exec);
       assert.equal(result.text, 'Synthetic source documentation'); assert.equal(enabled.saved.length, 1);
       assert.deepEqual(requestBody, { method: 'get_data_source_desc', params: { name: 'world_bank_open_data' } });
       assert.deepEqual(inferenceCalls(), [['POST', 'https://api.kimi.com', '/coding/v1/tools']]);
@@ -459,7 +477,8 @@ test('registered subscription routes use the same remote catalogs and native OAu
         access_token: accessFor('xai', '-ROTATED'), refresh_token: 'SYNTHETIC-SEARCH-ROTATED-REFRESH', expires_in: 3600,
       }, { headers: { 'content-type': 'application/json' } });
       metadata('xai', { access: accessFor('xai', '-ROTATED') });
-      const enabled = await mount({ ids: ['xai'], expired: true, config: { grokXSearch: true } });
+      const host = await chatHost(), caller = host.sessionAgent('grok');
+      const enabled = await mount({ host, ids: ['xai'], expired: true, config: { grokXSearch: true } });
       await waitForWarmup(0, 3, 'xAI OAuth and metadata');
       assert.deepEqual((await enabled.settings()).vendorTools.grokXSearch, { enabled: true, reason: null });
       assert.deepEqual(inferenceCalls(), [], 'status may fetch metadata, never execute X Search');
@@ -473,7 +492,9 @@ test('registered subscription routes use the same remote catalogs and native OAu
           { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'Synthetic X result',
             annotations: [{ type: 'url_citation', url: 'https://x.com/xai/status/123' }] }] }] };
       }, { headers: { 'content-type': 'application/json' } });
-      const result = await enabled.tools.get('grok_x_search').execute({ query: 'Synthetic X query', max_turns: 1 }, exec);
+      host.slashLoad(caller.session, await host.ctx.skills.get('grok-x-search'));
+      assert.deepEqual(inferenceCalls(), [], 'skill loading is not a paid search');
+      const result = await (await host.nextTools(caller)).get('grok_x_search').execute({ query: 'Synthetic X query', max_turns: 1 }, exec);
       assert.equal(result.text, 'Synthetic X result', JSON.stringify(result));
       assert.deepEqual(result.citations, ['https://x.com/xai/status/123']); assert.equal(enabled.saved.length, 1);
       assert.equal(body.tool_choice, 'required');

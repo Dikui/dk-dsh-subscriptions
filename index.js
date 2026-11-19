@@ -7,14 +7,13 @@ import { createAutoProxy } from './network.js';
 import { createAccountModels, createAccountQuota } from './models.js';
 import { accountQuotaSources, opencodeGoQuotaSource } from './quota-sources.js';
 import { accountModelSources } from './model-sources.js';
-import { createKimiTools } from './kimi-tools.js';
-import { createGrokSearchTool } from './grok-tools.js';
+import { registerVendorSkills } from './vendor-skills.js';
 import { createSpeedHost } from './speed-host.js';
 import { withSpeedPayload } from './speed.js';
 import packageInfo from './package.json' with { type: 'json' };
 
 export const name = 'dk-dsh-subscriptions';
-export const inject = ['authorization', 'credentials', 'llm', 'connection', 'tools'];
+export const inject = ['authorization', 'credentials', 'llm', 'connection'];
 
 export async function apply(ctx, { kimiDatasource = false, grokXSearch = false, opencodeGoQuota = false,
   opencodeApiKeyRef = 'OPENCODE_GO_API_KEY' } = {}) {
@@ -24,8 +23,6 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false, 
   if (typeof opencodeApiKeyRef !== 'string' || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(opencodeApiKeyRef)) {
     throw new TypeError('opencodeApiKeyRef must be an environment variable name.');
   }
-  const kimiDatasourceStatus = Object.freeze({ enabled: kimiDatasource, reason: kimiDatasource ? null : 'NOT_ENABLED' });
-  const grokXSearchStatus = Object.freeze({ enabled: grokXSearch, reason: grokXSearch ? null : 'NOT_ENABLED' });
   // Resolve the exact pi-ai version shipped with the official adapter, not a
   // second transport/auth installation or a package copied into this bundle.
   const require = createRequire(import.meta.url);
@@ -177,28 +174,22 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false, 
   });
   const routes = [...bindings.profiles().keys()];
   if (routes.length) ctx.llm.registerAdapter(routes, adapter);
+  const vendorTools = await registerVendorSkills(ctx, { kimiDatasource, grokXSearch, adapterUrl,
+    version: packageInfo.version, signal: lifetime.signal,
+    getAuth: (route, signal) => network.run(() => authModels.getAuth(route, { signal })),
+    fetchTool: (url, options) => network.run(() => fetch(url, options)),
+    attachments: () => ctx.get('attachments'),
+  });
   api = createSubscriptions({ authorization: {
     describe: key => ctx.authorization.describe(key),
     begin: request => network.run(() => ctx.authorization.begin(request)),
   }, credentials: ctx.credentials, llm: ctx.llm, catalog, keyFor: recordKeyFor, accountModels, accountQuotas,
     readQuotaKey: (id, signal) => id === 'opencode-go' ? readOpencodeKey(signal) : undefined,
-    vendorTools: { kimiDatasource: kimiDatasourceStatus, grokXSearch: grokXSearchStatus } });
+    vendorTools });
   // Startup warmup is a single lifetime-owned metadata operation, not a timer.
   // Deliberately not awaited: a slow catalog endpoint would otherwise delay the
   // whole plugin load, and the picker refreshes when the catalog arrives.
   void api.status(lifetime.signal).catch(() => {});
   ctx.connection.fetch.register({ path: '/api/subscriptions-lite', methods: ['GET', 'POST'],
     requestBody: 'buffered', fetch: createHttpHandler(api) });
-  for (const tool of createKimiTools({
-    enabled: kimiDatasourceStatus.enabled, version: packageInfo.version, signal: lifetime.signal,
-    getAuth: signal => network.run(() => authModels.getAuth('subscription-kimi-coding', { signal })),
-    fetchTool: (url, options) => network.run(() => fetch(url, options)),
-    attachments: () => ctx.get('attachments'),
-  })) ctx.tools.register(tool);
-  ctx.tools.register(createGrokSearchTool({
-    enabled: grokXSearchStatus.enabled, signal: lifetime.signal,
-    getAuth: signal => network.run(() => authModels.getAuth('subscription-xai', { signal })),
-    fetchTool: (url, options) => network.run(() => fetch(url, options)),
-    attachments: () => ctx.get('attachments'),
-  }));
 }

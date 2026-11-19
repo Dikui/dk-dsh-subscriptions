@@ -21,7 +21,7 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 ## 使用
 
 1. 在 DSH 安装本目录作为本地 bundle（由 `plugin_manager install_bundle` 完成，勿直接改 profile）。
-2. 打开 **设置 → dk-dsh-subscriptions → 模型接入**，选择 OpenAI、Kimi 或 Grok 登录。**数据工具**是独立子页，两类内容不会同时显示。Grok 需要当前官方 SDK 提供 xAI OAuth；旧 SDK 不支持时保持不可用。
+2. 打开 **设置 → 模型 → Subscriptions → 模型接入**，选择 OpenAI、Kimi 或 Grok 登录。**数据工具**是独立子页，两类内容不会同时显示。Grok 需要当前官方 SDK 提供 xAI OAuth；旧 SDK 不支持时保持不可用。
 3. 点击连接会先打开等待页，取得官方授权链接后跳转。若弹窗受限，可直接点击面板里的 **打开官方授权页面**，或 **复制授权链接** 到浏览器，再使用显示的授权码。由用户确认账户和授权；插件及代理工具不代填账号密码、不代点授权同意。
 4. 三个厂商均在已登录启动、授权完成及读取模型列表时自动同步；60 秒内复用缓存，后续访问自动重查。也可点击 **刷新模型目录 · 不发送推理请求** 强制更新。新模型无需手工添加或等待 SDK 名单更新。另行点击模型测试并确认后才会发送很短的编码问题，**消耗额度；Grok 还可能额外收费**。
 5. 主会话的模型选择器使用上表的独立路由。已有其他插件的路由保持不变。
@@ -42,24 +42,28 @@ OpenCode Go 的用量来自官方客户端使用的 `GET https://opencode.ai/zen
 
 来源：[OpenAI usage 请求](https://github.com/openai/codex/blob/main/codex-rs/backend-client/src/client/rate_limit_resets.rs)、[窗口结构](https://github.com/openai/codex/blob/main/codex-rs/codex-backend-openapi-models/src/models/rate_limit_window_snapshot.rs)、[Kimi 当前结构](https://github.com/MoonshotAI/kimi-code/blob/eb2035f3cad57cc12d4d5082ec626f7f0ea5f651/packages/oauth/src/managed-usage.ts)、[Kimi 旧结构](https://github.com/MoonshotAI/kimi-cli/blob/main/src/kimi_cli/ui/shell/usage.py)、[OpenCode Go 文档](https://opencode.ai/docs/go/)。验证只使用合成凭证和模拟网络；OpenCode 端点另用现有 key 做过一次只读 GET，未在已安装 GUI 中验证显示。
 
-## Kimi 数据工具（显式启用）
+## 数据工具按会话加载
 
-打开 **设置 → dk-dsh-subscriptions → 数据工具**。页面只保留标题、状态和必要操作，费用提示收进默认关闭的 **费用说明**。未连接时点击 **前往连接** 返回模型接入页，不会自动开始授权；切换子页不打断授权，也不发送查询。
+在 **设置 → 模型 → Subscriptions → 数据工具** 查看状态和费用说明。两个开关独立：启用后，聊天只列出对应的技能摘要，不预载查询工具。模型可用 `skill` 加载，用户也可在消息首行输入 `/kimi-datasource` 或 `/grok-x-search`。成功加载后，相应工具从当前会话的下一模型步骤起可用；普通提及、失败的加载、新会话或 fork 不会继承激活。加载本身不请求厂商，也不表示用户同意收费。
+
+查询能力要求 DSH 的技能服务和按步骤筛选工具的能力（已声明的版本中为 0.2.2-rc.1 至 rc.3）。在 0.2.1-rc.5 或缺少相应服务的宿主上，即使已配置开关，也不会发布这两项技能或工具，设置显示未启用；订阅账号设置、HTTP 和三个模型路由不因此停用。
+
+### Kimi 数据工具
 
 在聊天中可以这样提问：**用 Kimi 世界银行数据查询中国最近五个有数据年份的 GDP，列成表格并注明单位与来源。** 这不是“只读说明”的功能限制，也不要求当前模型是 Kimi；实际调用仍需确认可能产生的额度或余额消耗。
 
-已独立注册 `kimi_get_data_source_desc` 与 `kimi_call_data_source_tool`，不经过模型推理流，也不要求主模型是 Kimi。实现见 [kimi-tools.js](<kimi-tools.js>)。
+`kimi-datasource` 对应 `kimi_get_data_source_desc` 与 `kimi_call_data_source_tool`，不经过 Kimi 推理流，也不要求主模型是 Kimi。实现见 [kimi-tools.js](<kimi-tools.js>)。
 
-- 无配置时默认关闭，返回 `KIMI_DATASOURCE_DISABLED`，在读取凭证、访问附件或联网前停止。**本地 bundle 已按用户要求在 [cordis.patch.yml](<cordis.patch.yml>) 设置 `config.kimiDatasource: true`**；改为 `false` 可关闭，重新加载插件后生效。设置页状态接口返回 `vendorTools.kimiDatasource`，不会用启用或登录成功冒充数据权益已验证。
+- 无配置时默认关闭，无技能入口或可调用的数据工具。**本地 bundle 已按用户要求在 [cordis.patch.yml](<cordis.patch.yml>) 设置 `config.kimiDatasource: true`**；改为 `false` 可关闭，重新加载插件后生效。设置页状态接口返回 `vendorTools.kimiDatasource`，不会用启用或登录成功冒充数据权益已验证。
 - 已接好现有共享 Kimi OAuth 与插件作用域代理。离线检查覆盖动态 API 参数、两种请求体、取消、错误脱敏及不重试；不读取 Kimi CLI 凭证，不安装或执行官方插件，不回退 API key，不冒充官方客户端。
 - 解析器将完整 JSON 响应存为宿主附件，只内联最多 16,000 个字符的文本预览并标记截断；嵌入的文件保留在 JSON 中，不自动解码或按上游路径写文件。当前请求上限 64 KiB、响应上限 32 MiB、网络与授权阶段最长 30 秒，附件存储不支持时拒绝发起查询。首版排除需要单独 `MP_API_KEY` 的 `materials_project`。
 - 第三方客户端细则、全部源权益与精确计费仍未知；启用不是厂商支持承诺。**包括说明查询在内，都可能扣套餐额度或 ExtraUsage 余额**，请明确授权后再调用。本项目始终使用真实名称与版本，不伪装成 Kimi Code。已取回 World Bank 的真实说明，修正 JSON 字符串解析后离线重放通过；实际取数、其他源与 GUI 端到端仍未验证。
 
-## Grok X Search（显式启用）
+### Grok X Search
 
-独立工具 `grok_x_search` 可被任意主模型调用，复用共享 Grok OAuth、官方刷新锁和插件作用域代理；搜索仍需额外调用 Grok 推理，并非免费的原始搜索接口。实现见 [grok-tools.js](<grok-tools.js>)。
+加载 `grok-x-search` 后，任意主模型都可使用 `grok_x_search`，复用共享 Grok OAuth、官方刷新锁和插件作用域代理；搜索仍需额外调用 Grok 推理，并非免费的原始搜索接口。实现见 [grok-tools.js](<grok-tools.js>)。
 
-- 无配置时默认关闭，返回 `GROK_X_SEARCH_DISABLED`，不读取凭证、不访问附件、不联网。本地 bundle 已按本次实现请求在 [cordis.patch.yml](<cordis.patch.yml>) 设置 `config.grokXSearch: true`；设置页状态接口返回 `vendorTools.grokXSearch`。已通过本地链接安装的旧进程需完全退出并重启 DSH；刷新页面不会替换已加载的宿主模块。
+- 无配置时默认关闭，无技能入口或可调用的搜索工具。本地 bundle 已按本次实现请求在 [cordis.patch.yml](<cordis.patch.yml>) 设置 `config.grokXSearch: true`；设置页状态接口返回 `vendorTools.grokXSearch`。已通过本地链接安装的旧进程需完全退出并重启 DSH；刷新页面不会替换已加载的宿主模块。
 - 参数为 `query`，可选 `model`（默认 `grok-4.7`）、互斥的 `allowed_x_handles` / `excluded_x_handles`（1–20 个、不含 @）、UTC 日期 `from_date`（含）/ `to_date`（不含），以及 `max_turns`（1–5，默认 2）。用户名与日期过滤不约束线程抓取。示例：**用 Grok X Search 搜索 @xai 关于 Grok 的公开帖子，最多一轮，附来源；我同意本次可能产生的推理及搜索费用。**
 - 只向 `https://api.x.ai/v1/responses` 发送 `tools: [{type: 'x_search'}]` 与 `tool_choice: 'required'`；禁用图片/视频理解，`store: false`，不自动重试、不回退 API key。SDK 的 `auth.apiKey` 字段可承载 OAuth access token，接入时仍强制验证 `source: 'OAuth'`，不是 API-key 认证回退。
 - 返回最多 16,000 字符正文、20 个去重来源 URL、服务端 token/抓取用量以及 `searched`、完成/截断状态。`searched: false` 代表未确认实际执行搜索；无结果不伪造来源。完整脱敏 JSON 作为附件保存，响应上限 8 MiB、授权及网络阶段最长 120 秒；附件服务不可用时拒绝发起收费请求。第三方帖子和模型摘要都是不可信数据，不是指令。
@@ -154,6 +158,8 @@ ELECTRON_RUN_AS_NODE=1 \
 ```
 
 原生 `fetch` 的 dispatcher 协议随 Node 版本变化；代理回归检查应使用 **DSH 实际启动的 Node 运行时**，而不只使用终端的 `node`。将 `DSH_TEST_UNDICI` 指向 DSH 配套的 Undici 目录后，运行 `--test test/network-runtime.test.js`。该检查使用 MockAgent，禁用真实网络，覆盖桌面 Node 24 协议兼容和全局 fetch 防递归补丁跳回原始 fetch 的场景；依赖不可用时默认跳过，不把跳过算作通过。
+
+用上述桌面运行时执行 `--test test/vendor-skills-runtime.test.js test/catalog-runtime.test.js`，可通过真实的 `SkillRegistry` 与 `ToolsService.resolve` 验证开关组合、同会话的下一步激活、失败与同名覆盖，以及新会话隔离。
 
 同样设置 `DSH_TEST_UNDICI` 后运行 `--test test/catalog-runtime.test.js`，可检查真实官方适配器的账号模型列表、主路由解析和 prepared-call 元数据冻结；这部分元数据检查的推理传输用立即停止的替身。Grok 部分则通过 MockAgent 验证原生 OAuth 刷新、Responses SSE 和短测试：缺失 OAuth 或存有 API key 时，即使存在环境/调用方密钥也不发送请求；401/403/429 只返回脱敏失败，不重试或付费回退。检查通过公开插件入口注册适配器，凭证仅存在于内存，所有 HTTP 均被模拟且禁止外连，不查询真实账户、不消耗推理额度。
 
