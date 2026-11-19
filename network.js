@@ -8,16 +8,10 @@ const proxyNames = ['https_proxy', 'HTTPS_PROXY', 'http_proxy', 'HTTP_PROXY', 'a
 export async function createAutoProxy(loadUndici, {
   env = process.env, platform = process.platform, readSystem = exec,
 } = {}) {
-  const diagnostic = { mode: 'direct', reason: 'unsupported-platform', requests: 0, lastStatus: null };
-  const status = () => ({ ...diagnostic });
-  const direct = { enabled: false, status, run: fn => fn(), wrap: stream => stream, dispose: async () => {} };
+  const direct = { enabled: false, run: fn => fn(), wrap: stream => stream, dispose: async () => {} };
   // Explicit routing belongs to DSH, including invalid/unsupported proxy values.
   if (platform !== 'darwin') return direct;
-  if (proxyNames.some(name => env[name]?.trim())) {
-    Object.assign(diagnostic, { mode: 'environment', reason: 'explicit-proxy-variable' });
-    return direct;
-  }
-  diagnostic.reason = 'system-proxy-query-failed';
+  if (proxyNames.some(name => env[name]?.trim())) return direct;
   let stdout;
   try {
     ({ stdout } = await readSystem('/usr/sbin/scutil', ['--proxy'], {
@@ -26,10 +20,8 @@ export async function createAutoProxy(loadUndici, {
   } catch { return direct; }
   // Top-level keys only: scoped interface settings need not be the active route.
   const value = key => new RegExp(`^  ${key} : (.+)$`, 'm').exec(stdout)?.[1].trim();
-  diagnostic.reason = 'no-supported-system-https-proxy';
   if (value('HTTPSEnable') !== '1' || value('ProxyAutoConfigEnable') === '1'
     || value('ProxyAutoDiscoveryEnable') === '1') return direct;
-  diagnostic.reason = 'invalid-system-proxy';
   const host = value('HTTPSProxy'), portText = value('HTTPSPort') ?? '', port = Number(portText);
   if (!host || !/^\d+$/.test(portText) || port < 1 || port > 65535) return direct;
   let url;
@@ -40,20 +32,13 @@ export async function createAutoProxy(loadUndici, {
   // ponytail: manual system HTTPS proxy only; PAC/SOCKS need a separate resolver.
   const exceptions = /^  ExceptionsList : <array> \{\n([\s\S]*?)^  \}/m.exec(stdout)?.[1] ?? '';
   const bypass = [...exceptions.matchAll(/^    \d+ : (.+)$/gm)].map(match => match[1].trim());
-  const { EnvHttpProxyAgent, Dispatcher, DecoratorHandler, getGlobalDispatcher, setGlobalDispatcher } = await loadUndici();
+  const { EnvHttpProxyAgent, Dispatcher, getGlobalDispatcher, setGlobalDispatcher } = await loadUndici();
   const dispatcher = new EnvHttpProxyAgent({ httpProxy: '', httpsProxy: url.href,
     noProxy: [env.no_proxy?.trim() || env.NO_PROXY, ...bypass, 'localhost', '.localhost', '127.0.0.1', '::1', '[::1]'].filter(Boolean).join(',') });
   const excludeSimple = value('ExcludeSimpleHostnames') === '1';
-  Object.assign(diagnostic, { mode: 'system-https', reason: null });
   const scope = new AsyncLocalStorage();
   const previous = getGlobalDispatcher();
   let enabled = true;
-  class ObservedResponse extends DecoratorHandler {
-    onResponseStart(controller, status, headers, message) {
-      diagnostic.lastStatus = status;
-      return super.onResponseStart(controller, status, headers, message);
-    }
-  }
   // Route below fetch hooks: billion-context can re-anchor them to native fetch.
   const routed = Dispatcher.prototype.compose.call(previous, dispatch => (options, handler) => {
     if (!enabled || !scope.getStore()) return dispatch(options, handler);
@@ -64,17 +49,13 @@ export async function createAutoProxy(loadUndici, {
     const local = hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.startsWith('127.')
       || ['::1', '::', '0.0.0.0'].includes(hostname);
     if (target.protocol !== 'https:' || local || (excludeSimple && !hostname.includes('.') && !hostname.includes(':'))) return dispatch(options, handler);
-    // Keep only transport counters/status, never URLs, headers, or OAuth bodies.
-    diagnostic.requests += 1;
-    diagnostic.lastStatus = null;
-    return dispatcher.dispatch(options, new ObservedResponse(handler));
+    return dispatcher.dispatch(options, handler);
   });
   // Undici installs its v1 compatibility wrapper for desktop Node's native fetch.
   setGlobalDispatcher(routed);
   const run = fn => scope.run(true, fn);
   return {
     enabled: true,
-    status,
     run,
     // Both stream() and prepareCall() reach this lazy iterator; scope every step.
     wrap: stream => ({
@@ -85,7 +66,6 @@ export async function createAutoProxy(loadUndici, {
     }),
     async dispose() {
       enabled = false;
-      Object.assign(diagnostic, { mode: 'direct', reason: 'disposed' });
       if (getGlobalDispatcher() === routed) setGlobalDispatcher(previous);
       await dispatcher.close();
     },

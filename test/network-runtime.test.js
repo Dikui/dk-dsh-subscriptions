@@ -38,7 +38,6 @@ test('automatic proxy supports the desktop native fetch dispatcher protocol', {
     }));
     assert.equal(response.status, 401);
     assert.deepEqual(await response.json(), { error: 'invalid_grant' });
-    assert.deepEqual(proxy.status(), { mode: 'system-https', reason: null, requests: 1, lastStatus: 401 });
   } finally {
     clearTimeout(timer);
     await proxy.dispose();
@@ -85,7 +84,6 @@ test('automatic proxy survives a fetch guard that skips later hooks', {
       method: 'POST', body: 'code=synthetic-invalid-code', signal: AbortSignal.timeout(1000),
     })));
     assert.equal(response.status, 401);
-    assert.deepEqual(proxy.status(), { mode: 'system-https', reason: null, requests: 1, lastStatus: 401 });
   } finally {
     await proxy?.dispose();
     Object.defineProperty(globalThis, 'fetch', descriptor);

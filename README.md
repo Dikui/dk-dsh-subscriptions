@@ -30,7 +30,7 @@ Grok 复用已安装官方 SDK 的设备码登录、令牌刷新和 Responses �
 
 ## 订阅额度
 
-额度只显示在 DSH 左侧边栏底部（用户头像上方）的小仪表图标；悬停展开已连接账号的额度窗口、剩余比例、重置时间与更新时间。未知字段不代表零或无限额度；只列出有可用额度来源的账号，未连接或没有额度接口的订阅（如 Grok）不显示额度行。移开或按 Esc 收起，触屏和键盘可点击展开，每次展开拉取一次窄快照。支持但暂时失败的账号仍显示错误。OpenAI 读取 `GET /backend-api/wham/usage`，Kimi 读取 `GET /coding/v1/usages`，兼容当前 `usages` 比例及旧版 `usage` / `limits`。复用共享 OAuth、官方刷新锁和插件网络作用域；不发送推理，默认不读取 API key（OpenCode Go 额度是显式开启的例外，见下）。与模型目录一样，启动、登录完成及状态访问按需同步，成功或失败缓存 60 秒，不后台轮询；**刷新额度 · 不发送推理请求**或 `subscription_accounts { action: "quota", provider: "openai-codex" }` 可强制刷新。
+额度只显示在 DSH 左侧边栏底部（用户头像上方）的小仪表图标；悬停展开已连接账号的额度窗口、剩余比例、重置时间与更新时间。未知字段不代表零或无限额度；只列出有可用额度来源的账号，未连接或没有额度接口的订阅（如 Grok）不显示额度行。移开或按 Esc 收起，触屏和键盘可点击展开，每次展开拉取一次窄快照。支持但暂时失败的账号仍显示错误。OpenAI 读取 `GET /backend-api/wham/usage`，Kimi 读取 `GET /coding/v1/usages`，兼容当前 `usages` 比例及旧版 `usage` / `limits`。复用共享 OAuth、官方刷新锁和插件网络作用域；不发送推理，默认不读取 API key（OpenCode Go 额度是显式开启的例外，见下）。与模型目录一样，启动、登录完成及状态访问按需同步，成功或失败缓存 60 秒，不后台轮询；点击仪表中的 **刷新额度 · 不发送推理请求** 可强制刷新。
 
 接口错误不会隐藏授权或模型状态。当前仅展示 OpenAI 主／次窗口；存在额外独立限额时标为「部分额度信息不可用」。不展示 credits、钱包或货币余额，不把目录成功当作额度保证。Grok 没有已验证的官方 OAuth 订阅额度接口，因此不显示额度行；也不调用需要独立管理密钥的计费 API。数据是查询时快照，刷新不保证推理权益或订阅专属扣费。
 
@@ -50,7 +50,7 @@ OpenCode Go 的用量来自官方客户端使用的 `GET https://opencode.ai/zen
 
 已独立注册 `kimi_get_data_source_desc` 与 `kimi_call_data_source_tool`，不经过模型推理流，也不要求主模型是 Kimi。实现见 [kimi-tools.js](<kimi-tools.js>)。
 
-- 无配置时默认关闭，返回 `KIMI_DATASOURCE_DISABLED`，在读取凭证、访问附件或联网前停止。**本地 bundle 已按用户要求在 [cordis.patch.yml](<cordis.patch.yml>) 设置 `config.kimiDatasource: true`**；改为 `false` 可关闭，重新加载插件后生效。设置页状态接口与 `subscription_accounts` 共用 `vendorTools.kimiDatasource`，不会用启用或登录成功冒充数据权益已验证。
+- 无配置时默认关闭，返回 `KIMI_DATASOURCE_DISABLED`，在读取凭证、访问附件或联网前停止。**本地 bundle 已按用户要求在 [cordis.patch.yml](<cordis.patch.yml>) 设置 `config.kimiDatasource: true`**；改为 `false` 可关闭，重新加载插件后生效。设置页状态接口返回 `vendorTools.kimiDatasource`，不会用启用或登录成功冒充数据权益已验证。
 - 已接好现有共享 Kimi OAuth 与插件作用域代理。离线检查覆盖动态 API 参数、两种请求体、取消、错误脱敏及不重试；不读取 Kimi CLI 凭证，不安装或执行官方插件，不回退 API key，不冒充官方客户端。
 - 解析器将完整 JSON 响应存为宿主附件，只内联最多 16,000 个字符的文本预览并标记截断；嵌入的文件保留在 JSON 中，不自动解码或按上游路径写文件。当前请求上限 64 KiB、响应上限 32 MiB、网络与授权阶段最长 30 秒，附件存储不支持时拒绝发起查询。首版排除需要单独 `MP_API_KEY` 的 `materials_project`。
 - 第三方客户端细则、全部源权益与精确计费仍未知；启用不是厂商支持承诺。**包括说明查询在内，都可能扣套餐额度或 ExtraUsage 余额**，请明确授权后再调用。本项目始终使用真实名称与版本，不伪装成 Kimi Code。已取回 World Bank 的真实说明，修正 JSON 字符串解析后离线重放通过；实际取数、其他源与 GUI 端到端仍未验证。
@@ -59,7 +59,7 @@ OpenCode Go 的用量来自官方客户端使用的 `GET https://opencode.ai/zen
 
 独立工具 `grok_x_search` 可被任意主模型调用，复用共享 Grok OAuth、官方刷新锁和插件作用域代理；搜索仍需额外调用 Grok 推理，并非免费的原始搜索接口。实现见 [grok-tools.js](<grok-tools.js>)。
 
-- 无配置时默认关闭，返回 `GROK_X_SEARCH_DISABLED`，不读取凭证、不访问附件、不联网。本地 bundle 已按本次实现请求在 [cordis.patch.yml](<cordis.patch.yml>) 设置 `config.grokXSearch: true`；设置页和 `subscription_accounts` 共用 `vendorTools.grokXSearch`。已通过本地链接安装的旧进程需完全退出并重启 DSH；刷新页面不会替换已加载的宿主模块。
+- 无配置时默认关闭，返回 `GROK_X_SEARCH_DISABLED`，不读取凭证、不访问附件、不联网。本地 bundle 已按本次实现请求在 [cordis.patch.yml](<cordis.patch.yml>) 设置 `config.grokXSearch: true`；设置页状态接口返回 `vendorTools.grokXSearch`。已通过本地链接安装的旧进程需完全退出并重启 DSH；刷新页面不会替换已加载的宿主模块。
 - 参数为 `query`，可选 `model`（默认 `grok-4.7`）、互斥的 `allowed_x_handles` / `excluded_x_handles`（1–20 个、不含 @）、UTC 日期 `from_date`（含）/ `to_date`（不含），以及 `max_turns`（1–5，默认 2）。用户名与日期过滤不约束线程抓取。示例：**用 Grok X Search 搜索 @xai 关于 Grok 的公开帖子，最多一轮，附来源；我同意本次可能产生的推理及搜索费用。**
 - 只向 `https://api.x.ai/v1/responses` 发送 `tools: [{type: 'x_search'}]` 与 `tool_choice: 'required'`；禁用图片/视频理解，`store: false`，不自动重试、不回退 API key。SDK 的 `auth.apiKey` 字段可承载 OAuth access token，接入时仍强制验证 `source: 'OAuth'`，不是 API-key 认证回退。
 - 返回最多 16,000 字符正文、20 个去重来源 URL、服务端 token/抓取用量以及 `searched`、完成/截断状态。`searched: false` 代表未确认实际执行搜索；无结果不伪造来源。完整脱敏 JSON 作为附件保存，响应上限 8 MiB、授权及网络阶段最长 120 秒；附件服务不可用时拒绝发起收费请求。第三方帖子和模型摘要都是不可信数据，不是指令。
@@ -114,14 +114,14 @@ OpenCode Go 的用量来自官方客户端使用的 `GET https://opencode.ai/zen
 - **生效时间**：完全退出并重启 DSH 后加载；之后修改系统代理地址或端口，也需要重启以重新读取。再发起一次新授权，不重复提交已失败的授权码。
 - 若需要手动覆盖，DSH 0.2.1-rc.5 从用户级 `~/.dsh/.env`（或自定义 `DSH_HOME`）读取代理。**不要写进项目 `.env`**。这类显式环境设置影响整个 DSH，继承自启动进程的同名变量优先；与本插件的局部自动模式不同。
 - 若提示 **国家或地区被拒绝（HTTP 403）**，检查实际后台网络是否在 OpenAI 支持的地区。这不是模型额度不足的提示。若提示回调不匹配、账号 ID 解析失败或凭证未保存，应检查回调、官方适配器版本或凭证服务；修改代理不能修复所有授权错误。面板仅显示脱敏类别，不输出原始令牌响应。
-- `subscription_accounts` 的 `status` 还返回模型列表来源/查询状态、代理模式、未启用原因、经过自动 dispatcher 的请求数和最近 HTTP 状态码。状态查询可能同步三个厂商的远端模型元数据，并通过官方机制刷新到期凭证，但不发送推理请求。不会记录 URL、请求头、授权码或令牌。自动代理复用 Undici 自带的兼容包装器，兼容桌面 Node 24 的原生 `fetch`。
+- 自动代理复用 Undici 自带的兼容包装器，兼容桌面 Node 24 的原生 `fetch`。
 
 ## 安全边界
 
 - 只接受官方 `llm-pi-ai/<provider>` 下 `kind: grant`、`type: oauth` 的凭证；UI 和工具不返回 access/refresh token。
 - 新路由移除了 API-key 认证 handler，并禁用环境/本地文件凭证发现。没有 OAuth 就失败，**不会退到 API key 或其他厂商**。该保证覆盖本插件的三个 OAuth 路由；OpenCode Go 是独立的 quota-only 读取，不能用于推理、登录或模型目录，也不改变其他已安装插件。
 - 复用官方凭证及刷新锁。退出在同一写锁中清除共享 OAuth 的密钥，留下不含密钥的 `subscription-revoked` 标记，**也会使官方 pi-ai 对应路由退出**。该版本存储接口没有条件删除能力，保留标记可避免误删并发写入的 API key，并阻止原路由发现环境密钥。重新登录会替换标记。退出不会取消订阅，不代表远程令牌撤销，也不保证终止已发送请求或另一入口后来发起的登录。
-- 登录和回答授权提示仅在设置界面提供。`subscription_accounts` 工具提供状态、账号模型刷新、短测试、退出；不会返回授权验证码、链接、账号标识或令牌。
+- 在设置界面登录、回答授权提示、刷新模型、测试模型或退出；聊天中不提供订阅账号管理工具。
 - HTTP 接口由 DSH Connection 认证保护；POST 额外校验同源、JSON 和专用请求头。授权尝试有 15 分钟期限，界面退出时尽力取消自己发起的尝试。
 - 当前官方授权服务收到取消时会先停止等待，但已排队的凭证保存仍可能完成。**取消不等于撤销授权**；若取消后出现凭证，请使用移除凭证操作。这是已确认的上游限制，未改动官方包。
 - 只显示脱敏错误码，不透传可能含 token 的上游异常文本。

@@ -2,7 +2,7 @@ import { createRequire, findPackageJSON } from 'node:module';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { PiAiAdapter, recordKeyFor } from '@deepseek-ai/dsh-llm-pi-ai';
-import { createHttpHandler, createSubscriptions, fail, PROVIDERS, safeError, subscriptionBindings } from './core.js';
+import { createHttpHandler, createSubscriptions, fail, PROVIDERS, subscriptionBindings } from './core.js';
 import { createAutoProxy } from './network.js';
 import { createAccountModels, createAccountQuota } from './models.js';
 import { accountQuotaSources, opencodeGoQuotaSource } from './quota-sources.js';
@@ -189,34 +189,6 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false, 
   void api.status(lifetime.signal).catch(() => {});
   ctx.connection.fetch.register({ path: '/api/subscriptions-lite', methods: ['GET', 'POST'],
     requestBody: 'buffered', fetch: createHttpHandler(api) });
-  ctx.tools.register({
-    name: 'subscription_accounts',
-    description: 'Inspect subscription status, remote model catalogs and official quota metadata for OpenAI and Kimi (Grok quota is unsupported), force a metadata refresh, test a selected model, or clear local OAuth secrets. Status may query model/quota metadata with shared official OAuth and refresh expired tokens, but never sends inference. Catalog scope distinguishes account metadata from the Grok vendor catalog; neither proves model access or subscription-only billing. No static catalog or API-key fallback. Never starts or completes login: the user authorizes in Settings → dk-dsh-subscriptions. Tests consume quota and Grok may incur extra charges. Logout signs out the shared official pi-ai route locally, without cancelling a plan or revoking the account remotely.',
-    parameters: {
-      type: 'object', properties: {
-        action: { type: 'string', enum: ['status', 'models', 'quota', 'test', 'logout'], description: 'status automatically synchronizes remote model/quota metadata when stale. models or quota forces that metadata refresh for the selected provider. None sends inference; catalog results are not entitlement verification. test sends a small coding prompt. logout removes the shared local OAuth grant only.' },
-        provider: { type: 'string', enum: PROVIDERS.map(p => p.id), description: 'Required for models, quota, test and logout.' },
-        model: { type: 'string', description: 'Required for test: exact model id from status.' },
-      }, required: ['action'], additionalProperties: false,
-    },
-    output: { schema: { type: 'object' }, render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }] },
-    timeoutMs: 70000,
-    async execute(args, exec) {
-      try {
-        if (args.action === 'status') {
-          const result = await api.status(exec.signal);
-          // OAuth codes/URLs and prompts belong only to the human interaction surface.
-          return { network: network.status(), vendorTools: result.vendorTools,
-            providers: result.providers.map(({ attempt, ...p }) => ({ ...p, loginState: attempt?.state ?? null })) };
-        }
-        if (args.action === 'models') return await api.refreshModels(args.provider, exec.signal);
-        if (args.action === 'quota') return await api.refreshQuota(args.provider, exec.signal);
-        if (args.action === 'test') return await api.test(args.provider, args.model, exec.signal);
-        if (args.action === 'logout') return await api.logout(args.provider);
-        return { error: 'INVALID_ACTION' };
-      } catch (error) { return safeError(error); }
-    },
-  });
   for (const tool of createKimiTools({
     enabled: kimiDatasourceStatus.enabled, version: packageInfo.version, signal: lifetime.signal,
     getAuth: signal => network.run(() => authModels.getAuth('subscription-kimi-coding', { signal })),

@@ -32,13 +32,9 @@ function transport() {
     constructor(config) { super('proxy'); configuration = config; }
     async close() { calls.push('closed'); }
   }
-  class DecoratorHandler {
-    constructor(handler) { this.handler = handler; }
-    onResponseStart(...args) { return this.handler.onResponseStart(...args); }
-  }
   const previous = new Dispatcher();
   let current = previous;
-  const undici = { Dispatcher, EnvHttpProxyAgent, DecoratorHandler,
+  const undici = { Dispatcher, EnvHttpProxyAgent,
     getGlobalDispatcher: () => current, setGlobalDispatcher: next => { current = next; } };
   const fetch = (input, init) => new Promise(resolve => {
     const url = new URL(input instanceof Request ? input.url : input);
@@ -55,7 +51,6 @@ test('automatic proxy does not override explicit environment routing', async () 
       ...options, env, readSystem: () => assert.fail('must not query system settings'),
     });
     assert.equal(proxy.enabled, false);
-    assert.deepEqual(proxy.status(), { mode: 'environment', reason: 'explicit-proxy-variable', requests: 0, lastStatus: null });
     assert.equal(proxy.run(() => 'unchanged'), 'unchanged');
     await proxy.dispose();
   }
@@ -104,12 +99,10 @@ test('automatic proxy routes only scoped HTTPS requests and restores the dispatc
     assert.deepEqual(fixture.calls.filter(call => call.route === 'proxy'), [{ route: 'proxy', origin: 'https://auth.openai.com' }]);
     assert.equal(fixture.calls.filter(call => call.route === 'direct').length, 4);
     assert.equal(fixture.calls.at(-1).route, 'explicit');
-    assert.deepEqual(proxy.status(), { mode: 'system-https', reason: null, requests: 1, lastStatus: 204 });
     assert.deepEqual(env, { no_proxy: '  ', NO_PROXY: 'private.example' });
     await proxy.dispose();
     assert.equal(fixture.undici.getGlobalDispatcher(), fixture.previous);
     assert.equal(globalThis.fetch, fixture.fetch);
-    assert.equal(proxy.status().reason, 'disposed');
     assert.equal(fixture.calls.at(-1), 'closed');
     proxy = null;
   } finally { await proxy?.dispose(); globalThis.fetch = original; }

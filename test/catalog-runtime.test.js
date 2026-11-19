@@ -159,7 +159,14 @@ test('registered subscription routes use the same remote catalogs and native OAu
       tools: { register: value => tools.set(value.name, value) },
     }, config);
     adapter.config.profiles().get('subscription-openai-codex').transport = 'sse';
-    return { adapter, records, credentials, tools, saved, settingsFetch, tool: tools.get('subscription_accounts') };
+    async function settings(body, expectedStatus = 200) {
+      const response = await settingsFetch(new Request('http://dsh.internal/api/subscriptions-lite', body && {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-subscriptions-lite': '1' }, body: JSON.stringify(body),
+      }));
+      assert.equal(response.status, expectedStatus);
+      return response.json();
+    }
+    return { adapter, records, credentials, tools, saved, settings };
   }
   function inference(vendor, captured, { access = accessFor(vendor.id), times = 1 } = {}) {
     const [origin, path] = vendor.id === 'openai-codex' ? ['https://chatgpt.com', '/backend-api/codex/responses']
@@ -179,13 +186,16 @@ test('registered subscription routes use the same remote catalogs and native OAu
   }
   try {
     native = await import(pathToFileURL(adapterEntry).href);
+    await t.test('only vendor data tools are registered for chat', async () => {
+      const { tools } = await mount();
+      assert.deepEqual([...tools.keys()].sort(), ['grok_x_search', 'kimi_call_data_source_tool', 'kimi_get_data_source_desc']);
+    });
     let runtime;
     await t.test('already-authorized startup warms all three real metadata sources without inference', async () => {
       for (const vendor of vendors) metadata(vendor.id);
       const before = calls().length;
       runtime = await mount({ ids: vendors.map(vendor => vendor.id) });
       await waitForWarmup(before, 6, 'all three vendors');
-      assert.deepEqual([...runtime.tools.keys()].sort(), ['grok_x_search', 'kimi_call_data_source_tool', 'kimi_get_data_source_desc', 'subscription_accounts']);
       assert.deepEqual(calls().map(([method, origin, path]) => [method, origin, path.split('?')[0]]).sort(), [
         ['GET', 'https://chatgpt.com', '/backend-api/codex/models'], ['GET', 'https://chatgpt.com', '/backend-api/wham/usage'],
         ['GET', 'https://api.kimi.com', '/coding/v1/models'], ['GET', 'https://api.kimi.com', '/coding/v1/usages'],
@@ -194,12 +204,9 @@ test('registered subscription routes use the same remote catalogs and native OAu
       assert.deepEqual(inferenceCalls(), []);
       agent.assertNoPendingInterceptors();
     });
-    await t.test('settings, status, list, resolve and prepare expose one remote collection within the TTL', async () => {
+    await t.test('settings status, list, resolve and prepare expose one remote collection within the TTL', async () => {
       const before = calls().length;
-      const status = await runtime.tool.execute({ action: 'status' }, exec);
-      const settingsResponse = await runtime.settingsFetch(new Request('http://dsh.internal/api/subscriptions-lite'));
-      assert.equal(settingsResponse.status, 200);
-      const settings = await settingsResponse.json();
+      const status = await runtime.settings();
       const expected = [['server-only-codex'], ['k3.1-pro', 'k3.1-pro-highspeed'], ['grok-4.7', 'grok-next-server-only']];
       for (const [index, vendor] of vendors.entries()) {
         const state = status.providers.find(item => item.id === vendor.id);
@@ -210,7 +217,6 @@ test('registered subscription routes use the same remote catalogs and native OAu
         assert.equal(state.quota.state, vendor.id === 'xai' ? 'unsupported' : 'ready');
         if (vendor.id !== 'xai') assert.equal(state.quota.windows[0].usedPercent, vendor.id === 'openai-codex' ? 25 : 40);
         assert.deepEqual(state.models.map(item => item.id), expected[index]);
-        assert.deepEqual(settings.providers.find(item => item.id === vendor.id).models, state.models);
         const list = await runtime.adapter.listModels(vendor.route);
         assert.deepEqual(list.map(({ id, name }) => ({ id, name })), state.models);
         for (const model of list) {
@@ -223,21 +229,18 @@ test('registered subscription routes use the same remote catalogs and native OAu
         }
         assert.equal((await runtime.adapter.resolveModel(vendor.route, vendor.model)).context.contextWindow, vendor.context);
       }
-      assert.doesNotMatch(JSON.stringify({ status, settings }), /SYNTHETIC-|REMOTE-PAID|untrusted\.invalid/);
+      assert.doesNotMatch(JSON.stringify(status), /SYNTHETIC-|REMOTE-PAID|untrusted\.invalid/);
       assert.equal(calls().length, before, 'metadata is cached for 60 seconds, including settings/status reads');
     });
-    await t.test('explicit quota tool and HTTP refresh use native OAuth metadata only', async () => {
+    await t.test('explicit quota refresh uses native OAuth metadata only', async () => {
       agent.clearCallHistory();
       for (const [id, origin, path] of [['openai-codex', 'https://chatgpt.com', '/backend-api/wham/usage'],
         ['kimi-coding', 'https://api.kimi.com', '/coding/v1/usages']]) {
         agent.get(origin).intercept({ method: 'GET', path, headers: { authorization: `Bearer ${accessFor(id)}` } })
           .reply(200, id === 'openai-codex' ? { rate_limit: { primary_window: { used_percent: 50 } } } : { usages: { limit_5h: { used_ratio: 0.75 } } });
       }
-      assert.deepEqual(await runtime.tool.execute({ action: 'quota', provider: 'openai-codex' }, exec), { ok: true });
-      const response = await runtime.settingsFetch(new Request('http://dsh.internal/api/subscriptions-lite', { method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-subscriptions-lite': '1' }, body: JSON.stringify({ action: 'quota', provider: 'kimi-coding' }) }));
-      assert.deepEqual(await response.json(), { ok: true });
-      assert.equal((await runtime.tool.execute({ action: 'quota', provider: 'xai' }, exec)).error, 'QUOTA_UNSUPPORTED');
+      for (const provider of ['openai-codex', 'kimi-coding']) assert.deepEqual(await runtime.settings({ action: 'quota', provider }), { ok: true });
+      assert.equal((await runtime.settings({ action: 'quota', provider: 'xai' }, 400)).error, 'QUOTA_UNSUPPORTED');
       assert.equal(calls().length, 2); assert.deepEqual(inferenceCalls(), []);
       agent.assertNoPendingInterceptors();
     });
@@ -274,14 +277,14 @@ test('registered subscription routes use the same remote catalogs and native OAu
     await t.test('a remote none default resolves to off and reaches the native wire as none', async () => {
       const vendor = vendors[2], captured = [];
       metadata(vendor.id, { effort: 'none' });
-      assert.deepEqual(await runtime.tool.execute({ action: 'models', provider: vendor.id }, exec), { ok: true });
+      assert.deepEqual(await runtime.settings({ action: 'models', provider: vendor.id }), { ok: true });
       const resolved = await runtime.adapter.resolveModel(vendor.route, vendor.model);
       assert.equal(resolved.reasoning.defaultEffort, 'off');
       inference(vendor, captured);
       await successful(runtime.adapter.stream(optionsFor(vendor)));
       assert.equal(captured[0].body.reasoning.effort, 'none');
       metadata(vendor.id);
-      assert.deepEqual(await runtime.tool.execute({ action: 'models', provider: vendor.id }, exec), { ok: true });
+      assert.deepEqual(await runtime.settings({ action: 'models', provider: vendor.id }), { ok: true });
       agent.assertNoPendingInterceptors();
     });
     await t.test('K3.1 refuses explicit off before any native HTTP request', async () => {
@@ -301,14 +304,14 @@ test('registered subscription routes use the same remote catalogs and native OAu
           id: vendor.model, context_length: 262144, supports_reasoning: true,
           reasoning: { type: 'only', effort: { valid: ['low', 'high', 'max'], default: 'high' } },
         }] });
-      assert.deepEqual(await runtime.tool.execute({ action: 'models', provider: vendor.id }, exec), { ok: true });
+      assert.deepEqual(await runtime.settings({ action: 'models', provider: vendor.id }), { ok: true });
       const resolved = await runtime.adapter.resolveModel(vendor.route, vendor.model);
       assert.deepEqual(resolved.reasoning.efforts.map(item => item.id), ['low', 'high', 'max']);
       inference(vendor, captured);
       await successful(runtime.adapter.stream({ ...optionsFor(vendor), reasoningEffort: 'low' }));
       assert.equal(captured[0].body.reasoning_effort, 'low');
       metadata(vendor.id);
-      assert.deepEqual(await runtime.tool.execute({ action: 'models', provider: vendor.id }, exec), { ok: true });
+      assert.deepEqual(await runtime.settings({ action: 'models', provider: vendor.id }), { ok: true });
       agent.assertNoPendingInterceptors();
     });
     await t.test('thinking-only remote models without usable efforts load and omit reasoning', async () => {
@@ -318,7 +321,7 @@ test('registered subscription routes use the same remote catalogs and native OAu
           id: vendor.model, display_name: 'K2.7 Code Highspeed', context_length: 262144, supports_reasoning: true,
           supports_image_in: true, supports_video_in: true, supports_thinking_type: 'only', reasoning: { type: 'only' },
         }] });
-      assert.deepEqual(await runtime.tool.execute({ action: 'models', provider: vendor.id }, exec), { ok: true });
+      assert.deepEqual(await runtime.settings({ action: 'models', provider: vendor.id }), { ok: true });
       const list = await runtime.adapter.listModels(vendor.route);
       assert.deepEqual(list.map(item => item.id), [vendor.model]);
       const resolved = await runtime.adapter.resolveModel(vendor.route, vendor.model);
@@ -330,14 +333,14 @@ test('registered subscription routes use the same remote catalogs and native OAu
       assert.equal(captured[0].body.thinking, undefined);
       assert.equal(captured[0].body.reasoning_effort, undefined);
       metadata(vendor.id);
-      assert.deepEqual(await runtime.tool.execute({ action: 'models', provider: vendor.id }, exec), { ok: true });
+      assert.deepEqual(await runtime.settings({ action: 'models', provider: vendor.id }), { ok: true });
       agent.assertNoPendingInterceptors();
     });
     await t.test('forced metadata refresh updates descriptors without changing an already-prepared stream', async () => {
       const vendor = vendors[0], captured = [];
       const prepared = await runtime.adapter.prepareCall(vendor.route, vendor.model);
       metadata(vendor.id, { context: 200000, effort: 'low' });
-      assert.deepEqual(await runtime.tool.execute({ action: 'models', provider: vendor.id }, exec), { ok: true });
+      assert.deepEqual(await runtime.settings({ action: 'models', provider: vendor.id }), { ok: true });
       assert.equal(prepared.model.context.contextWindow, 100000);
       assert.equal((await runtime.adapter.resolveModel(vendor.route, vendor.model)).context.contextWindow, 200000);
       inference(vendor, captured, { times: 2 });
@@ -348,8 +351,8 @@ test('registered subscription routes use the same remote catalogs and native OAu
     for (const vendor of vendors) await t.test(`${vendor.id} remote failure clears every public model path without static fallback`, async () => {
       agent.clearCallHistory();
       metadata(vendor.id, { status: 503 });
-      assert.equal((await runtime.tool.execute({ action: 'models', provider: vendor.id }, exec)).error, 'MODEL_CATALOG_FAILED');
-      const state = (await runtime.tool.execute({ action: 'status' }, exec)).providers.find(item => item.id === vendor.id);
+      assert.equal((await runtime.settings({ action: 'models', provider: vendor.id }, 400)).error, 'MODEL_CATALOG_FAILED');
+      const state = (await runtime.settings()).providers.find(item => item.id === vendor.id);
       assert.deepEqual(state.models, []);
       assert.equal(state.modelCatalog.state, 'error'); assert.equal(state.modelCatalog.error, 'MODEL_CATALOG_FAILED');
       assert.equal(state.modelCatalog.scope, vendor.id === 'xai' ? 'vendor' : 'account');
@@ -360,8 +363,8 @@ test('registered subscription routes use the same remote catalogs and native OAu
       assert.doesNotMatch(JSON.stringify(state), /SYNTHETIC-UPSTREAM-SECRET|SYNTHETIC-/);
       assert.equal(calls().length, 1, 'cached failure must not retry or fall back to a paid/inference route');
       metadata(vendor.id, { only: true });
-      assert.deepEqual(await runtime.tool.execute({ action: 'models', provider: vendor.id }, exec), { ok: true });
-      const recovered = (await runtime.tool.execute({ action: 'status' }, exec)).providers.find(item => item.id === vendor.id);
+      assert.deepEqual(await runtime.settings({ action: 'models', provider: vendor.id }), { ok: true });
+      const recovered = (await runtime.settings()).providers.find(item => item.id === vendor.id);
       assert.deepEqual(recovered.models.map(item => item.id), [vendor.model]);
       assert.deepEqual((await runtime.adapter.listModels(vendor.route)).map(item => item.id), [vendor.model]);
       if (vendor.id !== 'openai-codex') {
@@ -381,7 +384,7 @@ test('registered subscription routes use the same remote catalogs and native OAu
         await assert.rejects(isolated.adapter.resolveModel(vendor.route, vendor.model), { code: 'MISSING_CREDENTIAL' });
         await assert.rejects(isolated.adapter.prepareCall(vendor.route, vendor.model), { code: 'MISSING_CREDENTIAL' });
         await assert.rejects(Array.fromAsync(isolated.adapter.stream(optionsFor(vendor))), { code: 'MISSING_CREDENTIAL' });
-        assert.equal((await isolated.tool.execute({ action: 'test', provider: vendor.id, model: vendor.model }, exec)).error, 'MISSING_CREDENTIAL');
+        assert.equal((await isolated.settings({ action: 'test', provider: vendor.id, model: vendor.model }, 400)).error, 'MISSING_CREDENTIAL');
       }
       assert.deepEqual(calls(), []);
     });
@@ -434,11 +437,8 @@ test('registered subscription routes use the same remote catalogs and native OAu
       metadata('kimi-coding');
       const enabled = await mount({ ids: ['kimi-coding'], config: { kimiDatasource: true } });
       await waitForWarmup(0, 2, 'Kimi datasource');
-      const state = await enabled.tool.execute({ action: 'status' }, exec);
+      const state = await enabled.settings();
       assert.deepEqual(state.vendorTools.kimiDatasource, { enabled: true, reason: null });
-      const settings = await enabled.settingsFetch(new Request('http://dsh.internal/api/subscriptions-lite'));
-      assert.equal(settings.status, 200);
-      assert.deepEqual((await settings.json()).vendorTools, state.vendorTools);
       assert.deepEqual(calls(), [['GET', 'https://api.kimi.com', '/coding/v1/models'], ['GET', 'https://api.kimi.com', '/coding/v1/usages']]);
       let requestBody;
       agent.get('https://api.kimi.com').intercept({ method: 'POST', path: '/coding/v1/tools',
@@ -461,7 +461,7 @@ test('registered subscription routes use the same remote catalogs and native OAu
       metadata('xai', { access: accessFor('xai', '-ROTATED') });
       const enabled = await mount({ ids: ['xai'], expired: true, config: { grokXSearch: true } });
       await waitForWarmup(0, 3, 'xAI OAuth and metadata');
-      assert.deepEqual((await enabled.tool.execute({ action: 'status' }, exec)).vendorTools.grokXSearch, { enabled: true, reason: null });
+      assert.deepEqual((await enabled.settings()).vendorTools.grokXSearch, { enabled: true, reason: null });
       assert.deepEqual(inferenceCalls(), [], 'status may fetch metadata, never execute X Search');
       assert.deepEqual(calls(), [['POST', 'https://auth.x.ai', '/oauth2/token'],
         ['GET', 'https://api.x.ai', '/v1/models'], ['GET', 'https://api.x.ai', '/v1/language-models']]);
@@ -489,7 +489,7 @@ test('registered subscription routes use the same remote catalogs and native OAu
         headers: { authorization: `Bearer ${accessFor('xai')}` } })
         .reply(status, { error: { message: 'SYNTHETIC-SECRET SYNTHETIC-CALLER-PAID upstream diagnostic' } },
           { headers: { 'content-type': 'application/json' } });
-      assert.deepEqual(await runtime.tool.execute({ action: 'test', provider: 'xai', model: vendors[2].model }, exec), {
+      assert.deepEqual(await runtime.settings({ action: 'test', provider: 'xai', model: vendors[2].model }, 400), {
         error: 'TEST_FAILED', message: 'The subscription operation did not complete. Check authorization and retry.',
       });
       assert.deepEqual(calls(), [['POST', 'https://api.x.ai', '/v1/responses']]);
