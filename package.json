@@ -1,6 +1,6 @@
 {
   "name": "dk-dsh-subscriptions",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "private": true,
   "type": "module",
   "description": "Minimal isolated OAuth connections for coding subscriptions in DeepSeek Harness",
@@ -41,10 +41,10 @@
   },
   "engines": {
     "node": ">=22.14",
-    "dsh": "0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2 || 0.2.2-rc.3"
+    "dsh": "0.2.1-rc.5 || >=0.2.2-rc.1 <0.3.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-llm-pi-ai": "0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2 || 0.2.2-rc.3"
+    "@deepseek-ai/dsh-llm-pi-ai": "0.2.1-rc.5 || >=0.2.2-rc.1 <0.3.0"
   },
   "dsh": {
     "bundle": {
