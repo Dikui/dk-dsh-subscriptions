@@ -135,15 +135,34 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false, 
       yield* network.wrap(super.streamWithSnapshot({ ...options, ...(reasoningEffort ? { reasoningEffort } : {}), signal }, snapshot));
     }
     async listModels(provider) {
-      if (!await bindings.auth.credentials.read(provider)) {
-        modelsForRoute(provider)?.clear();
-        return [];
-      }
-      await ensureAccountModels(provider);
-      return super.listModels(provider);
+      const models = modelsForRoute(provider);
+      if (!models) return super.listModels(provider);
+      // The picker and the settings list are display reads: they answer from the last
+      // validated catalog (or nothing) and never wait for an upstream refresh. A cold
+      // read starts one background load that is announced through emitAdaptersUpdated.
+      const view = await models.observe();
+      if (view.failure) fail(view.failure);
+      if (view.missing) return [];
+      if (view.state === 'error' && view.error) fail(view.error);
+      // The native adapter only turns its own LlmError into an empty list, so a
+      // credential that disappears between the read above and this call is still
+      // a signed-out provider: an empty picker entry, not a failure card.
+      try { return await super.listModels(provider); }
+      catch (error) { if (error?.code === 'MISSING_CREDENTIAL') return []; throw error; }
     }
     async resolveModel(provider, model, signal) {
-      await ensureAccountModels(provider, signal);
+      const models = modelsForRoute(provider);
+      if (models) {
+        // Selecting a model also stays display-first; only prepareCall/stream authorize it.
+        const view = await models.observe({ signal });
+        if (view.failure) fail(view.failure);
+        if (view.missing) fail('MISSING_CREDENTIAL');
+        if (view.state === 'error' && view.error) fail(view.error);
+        // A cold catalog has no display collection yet, so resolve from the account's
+        // current one (the adapter's baseline contract) rather than inventing an
+        // unknown model. A ready collection answers instantly, even while refreshing.
+        if (view.state !== 'ready') await ensureAccountModels(provider, signal);
+      }
       return super.resolveModel(provider, model, signal);
     }
     async prepareCall(provider, model, signal) {

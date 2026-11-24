@@ -86,8 +86,11 @@ function createAccountMetadata({ readIdentity, resolveIdentity = readIdentity, l
     flight = current;
     // A caller leaving must not cancel another caller's shared metadata query.
     const requestSignal = AbortSignal.any([current.controller.signal, AbortSignal.timeout(10000)]);
-    state = { source: 'account', scope, state: 'loading', error: null, updatedAt: null };
-    models = empty;
+    // Keep the last validated display for this same grant while it refreshes: list and
+    // resolve stay instant, while every authorization path still awaits this flight.
+    // A cold read has nothing to keep and shows its loading state instead.
+    state = { source: 'account', scope, state: state.state === 'unloaded' ? 'loading' : state.state,
+      error: state.state === 'error' ? state.error : null, updatedAt: state.updatedAt };
     current.promise = (async () => {
       const resolved = await waitFor(resolveIdentity(requestSignal), requestSignal);
       if (generation !== current.generation) fail(code('CHANGED'));
@@ -118,13 +121,51 @@ function createAccountMetadata({ readIdentity, resolveIdentity = readIdentity, l
     }).finally(() => { if (flight === current) flight = undefined; });
     return waitFor(current.promise, signal);
   }
-  return { ensure, clear, getValue: () => models, status: () => ({ ...state }) };
+  function snapshot() { return { ...state, models }; }
+  // Display read: answers from the last validated collection and, when it is stale,
+  // starts one refresh whose settled result is announced through onChange. It never
+  // waits for that refresh and never authorizes anything (ensure/prepareCall/stream do).
+  async function observe({ signal } = {}) {
+    signal?.throwIfAborted();
+    const readingGeneration = identityGeneration, readingCatalogGeneration = generation;
+    const identitySignal = AbortSignal.any([identityController.signal, AbortSignal.timeout(10000)]);
+    let identity, failure;
+    try { identity = await waitFor(waitFor(Promise.resolve().then(() => readIdentity(identitySignal)), identitySignal), signal); }
+    catch (error) {
+      signal?.throwIfAborted();
+      if (readingGeneration !== identityGeneration || readingCatalogGeneration !== generation) return snapshot();
+      failure = error instanceof SubscriptionError ? error.code : code('FAILED');
+    }
+    signal?.throwIfAborted();
+    if (readingGeneration !== identityGeneration || readingCatalogGeneration !== generation) return snapshot();
+    if (failure) {
+      // A credential that cannot be read must not keep a list attributed to it.
+      if (models !== empty || owner !== undefined || state.state !== 'unloaded') reset();
+      return { ...snapshot(), missing: true, failure };
+    }
+    if (typeof identity !== 'string' || !identity) {
+      if (models !== empty || owner !== undefined || state.state !== 'unloaded') reset();
+      return { ...snapshot(), missing: true };
+    }
+    // A rotated or replaced grant drops the old display at once; the read below only
+    // fills it again from the new account's own catalog.
+    if (owner !== undefined && owner !== identity) reset(true);
+    if (!flight) {
+      const stale = !checkedAt || Date.now() - checkedAt >= 60000;
+      if (state.state === 'unloaded' || ((state.state === 'ready' || state.state === 'error') && stale)) {
+        void ensure().catch(() => {});
+      }
+    }
+    return snapshot();
+  }
+  return { ensure, observe, clear, getValue: () => models, status: () => ({ ...state }) };
 }
 
 export function createAccountModels({ loadModels, ...options }) {
   const metadata = createAccountMetadata({ ...options, loadValue: loadModels, validate: validatedModels,
     empty: [], errorPrefix: 'MODEL_CATALOG' });
-  return { ensure: metadata.ensure, clear: metadata.clear, status: metadata.status, getModels: metadata.getValue };
+  return { ensure: metadata.ensure, observe: metadata.observe, clear: metadata.clear, status: metadata.status,
+    getModels: metadata.getValue };
 }
 
 export function createAccountQuota({ loadModels, ...options }) {

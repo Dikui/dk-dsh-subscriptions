@@ -125,6 +125,30 @@ test('registered subscription routes use the same remote catalogs and native OAu
     }
     assert.equal(calls().length, before + count, `${label}: startup metadata warmup did not settle`);
   }
+  const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+  // A hanging upstream must never be part of a display read: settle or fail here.
+  async function within(promise, ms, label) {
+    const blocked = Symbol('blocked');
+    const value = await Promise.race([promise, new Promise(resolve => setTimeout(() => resolve(blocked), ms))]);
+    assert.notEqual(value, blocked, label);
+    return value;
+  }
+  // The opposite guarantee for real sends: they must stay pending on current validation.
+  async function pending(promise, ms, label) {
+    const blocked = Symbol('blocked');
+    const settled = await Promise.race([promise.then(value => value, error => error), new Promise(resolve => setTimeout(() => resolve(blocked), ms))]);
+    assert.equal(settled, blocked, label);
+  }
+  // Counter-based polling: a few subtests mock Date, so wall-clock deadlines are unusable.
+  async function eventually(read, accept, label) {
+    let last;
+    for (let attempt = 0; attempt < 300; attempt++) {
+      try { last = await read(); } catch { last = undefined; }
+      if (accept(last)) return last;
+      await delay(10);
+    }
+    assert.fail(`${label}; last observed ${JSON.stringify(last)}`);
+  }
   async function mount({ ids = [], expired = false, config = {}, host } = {}) {
     const records = new Map(), saved = [];
     let adapter, settingsFetch;
@@ -140,9 +164,10 @@ test('registered subscription routes use the same remote catalogs and native OAu
         return records.get(key);
       },
     };
+    const events = [];
     const llm = { registerAdapter(routes, value) {
       assert.deepEqual([...routes].sort(), vendors.map(vendor => vendor.route).sort()); adapter = value;
-    }, emitAdaptersUpdated() {}, stream: request => adapter.stream({ ...request,
+    }, emitAdaptersUpdated() { events.push(Date.now()); }, stream: request => adapter.stream({ ...request,
       apiKey: 'SYNTHETIC-CALLER-PAID', headers: { authorization: 'Bearer SYNTHETIC-CALLER-PAID' } }) };
     for (const id of ids.filter(id => id !== 'xai')) {
       const access = accessFor(id, expired ? '-ROTATED' : '');
@@ -167,7 +192,7 @@ test('registered subscription routes use the same remote catalogs and native OAu
       assert.equal(response.status, expectedStatus);
       return response.json();
     }
-    return { adapter, records, saved, settings };
+    return { adapter, records, saved, settings, events };
   }
   async function chatHost(options) {
     const host = await vendorSkillHost(module.createRequire(adapterEntry), options);
@@ -247,6 +272,126 @@ test('registered subscription routes use the same remote catalogs and native OAu
       }
       assert.doesNotMatch(JSON.stringify(status), /SYNTHETIC-|REMOTE-PAID|untrusted\.invalid/);
       assert.equal(calls().length, before, 'metadata is cached for 60 seconds, including settings/status reads');
+    });
+    await t.test('an expired same-account catalog still opens and selects at once while it refreshes once in the background', async t => {
+      agent.clearCallHistory();
+      metadata('kimi-coding');
+      const picker = await mount({ ids: ['kimi-coding'] });
+      await waitForWarmup(0, 2, 'Kimi catalog');
+      t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+      t.mock.timers.tick(60001);
+      const release = Promise.withResolvers();
+      const refresh = { object: 'list', has_more: false, data: [{ id: 'k3.1-pro-next', display_name: 'K3.1 Pro Next', context_length: 777777 }] };
+      agent.get('https://api.kimi.com').intercept({ method: 'GET', path: '/coding/v1/models',
+        headers: { authorization: `Bearer ${accessFor('kimi-coding')}` } }).reply(200, async () => {
+        await release.promise; return refresh;
+      });
+      const kimiModels = () => calls().filter(([, origin, path]) => origin === 'https://api.kimi.com' && path === '/coding/v1/models').length;
+      const route = 'subscription-kimi-coding';
+      // Opening the picker must not wait for the expired catalog to revalidate upstream.
+      const listed = await within(picker.adapter.listModels(route), 500, 'opening the menu waited for a hanging catalog refresh');
+      assert.deepEqual(listed.map(model => model.id), ['k3.1-pro', 'k3.1-pro-highspeed']);
+      // The stale directory starts exactly one refresh, which the mock records before it hangs.
+      await eventually(kimiModels, count => count === 2, 'the stale directory did not start exactly one background refresh');
+      const selected = await within(picker.adapter.resolveModel(route, 'k3.1-pro'), 500, 'selecting a listed model waited for the refresh');
+      assert.equal(selected.context.contextWindow, 1048576);
+      const eventsBefore = picker.events.length;
+      release.resolve();
+      const updated = await eventually(() => picker.adapter.listModels(route),
+        list => list.map(model => model.id).join() === 'k3.1-pro-next', 'the refreshed catalog never reached the picker');
+      assert.equal(updated[0].name, 'K3.1 Pro Next');
+      assert.ok(picker.events.length > eventsBefore, 'the refreshed catalog must be announced');
+      const settled = calls().length;
+      for (let index = 0; index < 3; index++) {
+        await picker.adapter.listModels(route);
+        await picker.adapter.resolveModel(route, 'k3.1-pro-next');
+      }
+      assert.equal(calls().length, settled, 'a fresh catalog must not refresh again in a loop');
+    });
+    await t.test('a cold vendor returns at once without a static directory and announces its real catalog', async () => {
+      agent.clearCallHistory();
+      metadata('openai-codex');
+      metadata('kimi-coding');
+      const release = Promise.withResolvers();
+      agent.get('https://api.x.ai').intercept({ method: 'GET', path: '/v1/models',
+        headers: { authorization: `Bearer ${accessFor('xai')}` } }).reply(200, async () => {
+        await release.promise; return { object: 'list', data: grokRows() };
+      });
+      agent.get('https://api.x.ai').intercept({ method: 'GET', path: '/v1/language-models',
+        headers: { authorization: `Bearer ${accessFor('xai')}` } }).reply(200, async () => {
+        await release.promise; return { models: grokLanguageRows() };
+      });
+      const cold = await mount({ ids: vendors.map(vendor => vendor.id) });
+      await eventually(() => Promise.resolve(calls().filter(([, origin, path]) => origin === 'https://api.x.ai' && path === '/v1/models').length),
+        count => count === 1, 'the cold vendor startup read did not start');
+      const kimi = await eventually(() => cold.adapter.listModels('subscription-kimi-coding'),
+        list => list.length > 0, 'a warm vendor did not settle while another vendor was cold');
+      assert.deepEqual(kimi.map(model => model.id), ['k3.1-pro', 'k3.1-pro-highspeed']);
+      // The menu fans out over every provider; a hanging one must not hold the others or the menu.
+      const menu = await within(Promise.all(vendors.map(vendor => cold.adapter.listModels(vendor.route))), 500,
+        'a cold vendor blocked the model menu');
+      assert.deepEqual(menu[2], [], 'a pending catalog must not fall back to a static or foreign directory');
+      assert.deepEqual(inferenceCalls(), []);
+      const eventsBefore = cold.events.length;
+      release.resolve();
+      const xai = await eventually(() => cold.adapter.listModels('subscription-xai'),
+        list => list.map(model => model.id).join() === 'grok-4.7,grok-next-server-only', 'the cold vendor catalog never arrived');
+      assert.equal(xai.length, 2);
+      assert.ok(cold.events.length > eventsBefore, 'the real catalog must be announced when it arrives');
+    });
+    await t.test('a replaced credential drops the previous account directory before the new list arrives', async () => {
+      agent.clearCallHistory();
+      metadata('kimi-coding');
+      const swapped = await mount({ ids: ['kimi-coding'] });
+      await waitForWarmup(0, 2, 'Kimi catalog');
+      const route = 'subscription-kimi-coding';
+      assert.deepEqual((await swapped.adapter.listModels(route)).map(model => model.id), ['k3.1-pro', 'k3.1-pro-highspeed']);
+      const otherAccess = accessFor('kimi-coding', '-OTHER');
+      swapped.records.set(native.recordKeyFor('kimi-coding'), { kind: 'grant', payload: {
+        type: 'oauth', access: otherAccess, refresh: 'SYNTHETIC-OTHER-REFRESH', expires: Date.now() + 3600000,
+      } });
+      const release = Promise.withResolvers();
+      const other = { object: 'list', has_more: false, data: [{ id: 'other-account-model', display_name: 'Other Account Model', context_length: 99000 }] };
+      agent.get('https://api.kimi.com').intercept({ method: 'GET', path: '/coding/v1/models',
+        headers: { authorization: `Bearer ${otherAccess}` } }).reply(200, async () => {
+        await release.promise; return other;
+      });
+      const stale = await swapped.adapter.listModels(route);
+      assert.ok(!stale.some(model => model.id === 'k3.1-pro'), 'the previous account directory leaked after the credential was replaced');
+      const eventsBefore = swapped.events.length;
+      // A model from the replaced directory must never resolve; the new account's own
+      // catalog has to be read first, so this can wait but must fail, not answer.
+      const resolving = swapped.adapter.resolveModel(route, 'k3.1-pro').then(value => value, error => error.code);
+      await pending(resolving, 150, 'resolveModel answered from a directory whose account was already replaced');
+      release.resolve();
+      assert.equal(await resolving, 'UNKNOWN_MODEL');
+      const current = await eventually(() => swapped.adapter.listModels(route),
+        list => list.map(model => model.id).join() === 'other-account-model', 'the replacement account catalog never arrived');
+      assert.equal(current[0].name, 'Other Account Model');
+      assert.ok(swapped.events.length > eventsBefore, 'the replacement catalog must be announced');
+    });
+    await t.test('a send waits for the current validation and a failed refresh aborts it before inference', async t => {
+      agent.clearCallHistory();
+      metadata('kimi-coding');
+      const strict = await mount({ ids: ['kimi-coding'] });
+      await waitForWarmup(0, 2, 'Kimi catalog');
+      t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+      t.mock.timers.tick(60001);
+      const release = Promise.withResolvers();
+      agent.get('https://api.kimi.com').intercept({ method: 'GET', path: '/coding/v1/models',
+        headers: { authorization: `Bearer ${accessFor('kimi-coding')}` } }).reply(503, async () => {
+        await release.promise; return { error: 'SYNTHETIC-UPSTREAM-SECRET' };
+      });
+      const route = 'subscription-kimi-coding';
+      assert.deepEqual((await strict.adapter.listModels(route)).map(model => model.id), ['k3.1-pro', 'k3.1-pro-highspeed']);
+      const preparing = strict.adapter.prepareCall(route, 'k3.1-pro').then(value => value, error => error.code);
+      await pending(preparing, 150, 'prepareCall resolved without awaiting the current validation');
+      release.resolve();
+      assert.equal(await preparing, 'MODEL_CATALOG_FAILED');
+      await assert.rejects(strict.adapter.listModels(route), { code: 'MODEL_CATALOG_FAILED' });
+      await assert.rejects(strict.adapter.resolveModel(route, 'k3.1-pro'), { code: 'MODEL_CATALOG_FAILED' });
+      await assert.rejects(Array.fromAsync(strict.adapter.stream(optionsFor(vendors[1]))), { code: 'MODEL_CATALOG_FAILED' });
+      assert.deepEqual(inferenceCalls(), [], 'a failed validation must never reach inference');
     });
     await t.test('explicit quota refresh uses native OAuth metadata only', async () => {
       agent.clearCallHistory();
