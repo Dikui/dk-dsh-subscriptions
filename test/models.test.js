@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createAccountModels } from '../models.js';
+import { createAccountModels, createAccountQuota } from '../models.js';
 import { accountModelSources } from '../model-sources.js';
 
 const codexCatalog = options => createAccountModels(accountModelSources.get('openai-codex')(options));
@@ -231,4 +231,73 @@ test('catalog caches account metadata and explicit refresh fetches it again', as
   assert.equal(f.calls.length, 1);
   await f.models.ensure({ force: true });
   assert.equal(f.calls.length, 2);
+});
+
+test('a rotation persisted before its resolver returns is adopted without clearing its own flight', async () => {
+  let credential = 'account-a';
+  let resolves = 0, loads = 0;
+  const persisted = Promise.withResolvers(), resolverGate = Promise.withResolvers();
+  const catalog = createAccountModels({
+    readIdentity: async () => credential,
+    resolveIdentity: async () => {
+      resolves++;
+      if (resolves === 2) {
+        credential = 'account-b'; // the official resolver persists the rotated grant
+        persisted.resolve();
+        await resolverGate.promise; // ...and only then returns it to this flight
+      }
+      return credential;
+    },
+    loadModels: async ({ identity }) => {
+      loads++;
+      return identity === 'account-a' ? [{ id: 'a-model', name: 'A Model' }] : [{ id: 'b-model', name: 'B Model' }];
+    },
+  });
+  await catalog.ensure();
+  assert.deepEqual(catalog.getModels().map(model => model.id), ['a-model']);
+  const refreshing = catalog.ensure({ force: true });
+  await persisted.promise;
+  // Window: account B is persisted, the resolver has not returned, B's catalog is not loaded.
+  // A display read must hide A's list without aborting the rotation that is adopting B.
+  let view;
+  try {
+    view = await catalog.observe();
+    assert.equal(view.current, false);
+    assert.deepEqual(view.models, [], 'the previous grant stayed visible for the rotated grant');
+    assert.equal(resolves, 2, 'a display read must not restart the in-flight rotation');
+  } finally {
+    resolverGate.resolve();
+  }
+  await refreshing;
+  assert.deepEqual(catalog.getModels().map(model => model.id), ['b-model'], 'the rotation was aborted by its own display read');
+  assert.equal(resolves, 2);
+  assert.equal(loads, 2, 'one rotation performs one catalog load');
+  const settled = await catalog.observe();
+  assert.equal(settled.current, true);
+  assert.deepEqual(settled.models.map(model => model.id), ['b-model']);
+  assert.equal(loads, 2, 'a fresh display must not load again');
+});
+
+test('quota keeps its loading refresh semantics while model displays are retained', async () => {
+  let loads = 0;
+  const gate = Promise.withResolvers(), started = Promise.withResolvers();
+  const quota = createAccountQuota({
+    readIdentity: async () => 'account',
+    loadModels: async () => {
+      loads++;
+      if (loads === 2) { started.resolve(); await gate.promise; }
+      return { windows: [{ id: 'window' }] };
+    },
+  });
+  await quota.ensure();
+  assert.equal(quota.status().state, 'ready');
+  assert.deepEqual(quota.status().windows, [{ id: 'window' }]);
+  const refreshing = quota.ensure({ force: true });
+  await started.promise;
+  assert.equal(quota.status().state, 'loading', 'quota must not report a ready value while refreshing');
+  assert.deepEqual(quota.status().windows, [], 'quota must not expose the previous value while refreshing');
+  gate.resolve();
+  await refreshing;
+  assert.equal(quota.status().state, 'ready');
+  assert.deepEqual(quota.status().windows, [{ id: 'window' }]);
 });

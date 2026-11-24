@@ -135,33 +135,39 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false, 
       yield* network.wrap(super.streamWithSnapshot({ ...options, ...(reasoningEffort ? { reasoningEffort } : {}), signal }, snapshot));
     }
     async listModels(provider) {
+      if (lifetime.signal.aborted) return [];
+      // Only this plugin's own routes are answered here; never a native static directory.
+      if (!PROVIDERS.some(item => item.route === provider)) return [];
       const models = modelsForRoute(provider);
-      if (!models) return super.listModels(provider);
-      // The picker and the settings list are display reads: they answer from the last
-      // validated catalog (or nothing) and never wait for an upstream refresh. A cold
-      // read starts one background load that is announced through emitAdaptersUpdated.
+      // A supported route without a configured model source fails closed.
+      if (!models) fail('MODEL_CATALOG_UNAVAILABLE');
+      // The picker and the settings list are display reads: they answer from the display
+      // validated for the current grant (or nothing) and never wait for an upstream refresh.
+      // A cold read starts one background load that is announced through emitAdaptersUpdated.
       const view = await models.observe();
       if (view.failure) fail(view.failure);
       if (view.missing) return [];
       if (view.state === 'error' && view.error) fail(view.error);
-      // The native adapter only turns its own LlmError into an empty list, so a
-      // credential that disappears between the read above and this call is still
-      // a signed-out provider: an empty picker entry, not a failure card.
-      try { return await super.listModels(provider); }
-      catch (error) { if (error?.code === 'MISSING_CREDENTIAL') return []; throw error; }
+      // Project the validated display directly. Reading the credential again here could
+      // observe a newer grant while these descriptors still belong to the previous one.
+      return view.models.map(model => ({ provider, id: model.id, name: model.name,
+        inputModalities: [...(model.input ?? [])] }));
     }
     async resolveModel(provider, model, signal) {
       const models = modelsForRoute(provider);
+      // A supported route without a configured model source must not resolve the SDK's
+      // static directory; unknown routes keep the native adapter's own answer.
+      if (!models && PROVIDERS.some(item => item.route === provider)) fail('MODEL_CATALOG_UNAVAILABLE');
       if (models) {
         // Selecting a model also stays display-first; only prepareCall/stream authorize it.
         const view = await models.observe({ signal });
         if (view.failure) fail(view.failure);
         if (view.missing) fail('MISSING_CREDENTIAL');
         if (view.state === 'error' && view.error) fail(view.error);
-        // A cold catalog has no display collection yet, so resolve from the account's
-        // current one (the adapter's baseline contract) rather than inventing an
-        // unknown model. A ready collection answers instantly, even while refreshing.
-        if (view.state !== 'ready') await ensureAccountModels(provider, signal);
+        // A remembered id may only resolve from a collection validated for the current
+        // grant (the adapter's baseline contract). A ready collection answers instantly,
+        // even while it refreshes; anything else waits for that grant's own catalog.
+        if (!view.current) await ensureAccountModels(provider, signal);
       }
       return super.resolveModel(provider, model, signal);
     }

@@ -151,6 +151,7 @@ test('registered subscription routes use the same remote catalogs and native OAu
   }
   async function mount({ ids = [], expired = false, config = {}, host } = {}) {
     const records = new Map(), saved = [];
+    const registered = dispose.length;
     let adapter, settingsFetch;
     for (const id of ids) records.set(native.recordKeyFor(id), { kind: 'grant', payload: {
       type: 'oauth', access: accessFor(id), refresh: `SYNTHETIC-REFRESH-${id}`,
@@ -178,7 +179,14 @@ test('registered subscription routes use the same remote catalogs and native OAu
     }
     const { apply } = await import('../index.js');
     await apply({ credentials,
-      effect(callback) { const cleanup = callback(); if (cleanup) dispose.push(cleanup); },
+      effect(callback) {
+        // A subtest may unload its own instance early; the final sweep must not re-run it.
+        const cleanup = callback();
+        if (cleanup) {
+          let closed = false;
+          dispose.push(() => { if (closed) return; closed = true; return cleanup(); });
+        }
+      },
       get: () => ({ async saveFile(value) { saved.push(value); return { attachmentId: 'SYNTHETIC-REF', name: value.name, bytes: value.data.length }; } }),
       authorization: { describe: () => ({ methods: [{ id: 'oauth' }] }), begin: () => assert.fail('No login in offline tests') },
       llm, connection: { fetch: { register({ fetch }) { settingsFetch = fetch; } } },
@@ -192,7 +200,8 @@ test('registered subscription routes use the same remote catalogs and native OAu
       assert.equal(response.status, expectedStatus);
       return response.json();
     }
-    return { adapter, records, saved, settings, events };
+    return { adapter, records, saved, settings, events,
+      unload: () => Promise.all(dispose.slice(registered).map(close => close())) };
   }
   async function chatHost(options) {
     const host = await vendorSkillHost(module.createRequire(adapterEntry), options);
@@ -392,6 +401,62 @@ test('registered subscription routes use the same remote catalogs and native OAu
       await assert.rejects(strict.adapter.resolveModel(route, 'k3.1-pro'), { code: 'MODEL_CATALOG_FAILED' });
       await assert.rejects(Array.fromAsync(strict.adapter.stream(optionsFor(vendors[1]))), { code: 'MODEL_CATALOG_FAILED' });
       assert.deepEqual(inferenceCalls(), [], 'a failed validation must never reach inference');
+    });
+    await t.test('a rotated grant never shows the previous grant while its catalog loads', async t => {
+      agent.clearCallHistory();
+      metadata('kimi-coding');
+      const rotating = await mount({ ids: ['kimi-coding'] });
+      await waitForWarmup(0, 2, 'Kimi catalog');
+      const route = 'subscription-kimi-coding';
+      const key = native.recordKeyFor('kimi-coding');
+      const previous = rotating.records.get(key), rotated = accessFor('kimi-coding', '-ROTATED');
+      assert.deepEqual((await rotating.adapter.listModels(route)).map(model => model.id), ['k3.1-pro', 'k3.1-pro-highspeed']);
+      // Expire the grant so the official resolver rotates it, persisting the new access
+      // before its catalog read settles: the account is already B, its list still loading.
+      rotating.records.set(key, { ...previous, payload: { ...previous.payload, expires: 0 } });
+      agent.get('https://auth.kimi.com').intercept({ method: 'POST', path: '/api/oauth/token' })
+        .reply(200, { access_token: rotated, refresh_token: 'SYNTHETIC-ROTATED-REFRESH-kimi-coding', expires_in: 3600 },
+          { headers: { 'content-type': 'application/json' } });
+      const release = Promise.withResolvers();
+      t.after(() => release.resolve());
+      agent.get('https://api.kimi.com').intercept({ method: 'GET', path: '/coding/v1/models',
+        headers: { authorization: `Bearer ${rotated}` } }).reply(200, async () => {
+        await release.promise;
+        return { object: 'list', has_more: false, data: [{ id: 'k3.1-rotated-next', display_name: 'K3.1 Rotated Next', context_length: 999999 }] };
+      });
+      const kimiModels = () => calls().filter(([, origin, path]) => origin === 'https://api.kimi.com' && path === '/coding/v1/models').length;
+      const warm = kimiModels();
+      const eventsBefore = rotating.events.length;
+      const refreshing = rotating.settings({ action: 'models', provider: 'kimi-coding' });
+      await eventually(kimiModels, count => count === warm + 1, 'the explicit refresh did not start the rotated catalog read');
+      // Window: the resolver persisted the rotated grant and its catalog read is hanging.
+      const view = await within(rotating.adapter.listModels(route), 500, 'the display read waited for the hanging rotation');
+      assert.deepEqual(view, [], 'the previous grant stayed visible while the rotated grant was loading');
+      assert.equal(kimiModels(), warm + 1, 'a display read must not restart the in-flight rotation');
+      release.resolve();
+      await refreshing;
+      assert.deepEqual((await rotating.adapter.listModels(route)).map(model => model.id), ['k3.1-rotated-next']);
+      assert.equal(kimiModels(), warm + 1, 'one rotation performs one catalog read');
+      assert.equal(rotating.records.get(key).payload.access, rotated);
+      assert.ok(rotating.events.length > eventsBefore, 'the rotated catalog was not announced');
+      agent.assertNoPendingInterceptors();
+    });
+    await t.test('an unloaded adapter performs no display reads and unknown routes have no directory', async t => {
+      agent.clearCallHistory();
+      metadata('kimi-coding');
+      const closing = await mount({ ids: ['kimi-coding'] });
+      await waitForWarmup(0, 2, 'Kimi catalog');
+      const route = 'subscription-kimi-coding';
+      assert.deepEqual((await closing.adapter.listModels(route)).map(model => model.id), ['k3.1-pro', 'k3.1-pro-highspeed']);
+      // The picker can emit a stale event after unload; display reads must be inert.
+      await closing.unload();
+      agent.clearCallHistory();
+      assert.deepEqual(await closing.adapter.listModels(route), []);
+      assert.deepEqual(calls(), [], 'a display read after unload must not issue a request');
+      // The adapter never falls back to an unregistered route's native static directory.
+      assert.deepEqual(await closing.adapter.listModels('openai'), []);
+      assert.deepEqual(calls(), []);
+      agent.assertNoPendingInterceptors();
     });
     await t.test('explicit quota refresh uses native OAuth metadata only', async () => {
       agent.clearCallHistory();
