@@ -329,7 +329,7 @@ window.__ModuleLoader__.load({
           if (ack?.ok !== true) throw new Error('BAD_RESPONSE');
         }
         const value = await post(id, 'quota-state', signal);
-        if (value.provider !== id || typeof value.configured !== 'boolean' || !value.quota
+        if (!value || value.provider !== id || typeof value.configured !== 'boolean' || !value.quota
           || !validQuota(value.quota, value.configured)) throw new Error('BAD_RESPONSE');
         return value;
       }
@@ -339,19 +339,29 @@ window.__ModuleLoader__.load({
         const controller = new AbortController(); active.current = controller;
         setBusy(true);
         const results = await Promise.all(quotaProviders.map(async id => {
-          const latest = (items ?? []).find(item => item.id === id);
-          const previous = latest?.quota
-            ? { configured: latest.configured, supported: latest.quota.source === 'account' }
-            : capability.current.get(id);
+          // Eligibility has one source: the latest accepted snapshot. Transient failures leave it intact so the next
+          // click genuinely retries; stable revoked/unsupported answers are re-read once below and drop it.
+          const previous = capability.current.get(id);
+          const shouldForce = force && previous?.configured === true && previous?.supported === true;
           try {
-            const value = await send(id, force && previous?.configured === true && previous?.supported === true, controller.signal);
-            capability.current.set(id, { configured: value.configured, supported: value.quota.source === 'account' });
-            return { id, ...value };
-          } catch (cause) { return { id, error: controller.signal.aborted ? 'ABORTED' : cause.message }; }
+            return { id, value: await send(id, shouldForce, controller.signal) };
+          } catch (cause) {
+            const code = controller.signal.aborted ? 'ABORTED' : cause.message;
+            if (!controller.signal.aborted && (code === 'MISSING_CREDENTIAL' || code === 'QUOTA_UNSUPPORTED')) {
+              try { return { id, value: await send(id, false, controller.signal) }; }
+              catch (narrow) { return { id, error: controller.signal.aborted ? 'ABORTED' : narrow.message, drop: true }; }
+            }
+            return { id, error: code };
+          }
         }));
+        // Aborted or superseded generations never touch eligibility or the rendered list.
         if (generation.current !== version) return;
+        for (const result of results) {
+          if (result.value) capability.current.set(result.id, { configured: result.value.configured, supported: result.value.quota.source === 'account' });
+          else if (result.drop) capability.current.delete(result.id);
+        }
         setBusy(false);
-        setItems(results);
+        setItems(results.map(result => result.value ? { id: result.id, ...result.value } : { id: result.id, error: result.error }));
       }
       React.useEffect(() => {
         refresh();

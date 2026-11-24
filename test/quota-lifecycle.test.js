@@ -237,8 +237,60 @@ test('aborting during narrow quota credential lookup cannot query quota either',
     await started.promise;
     controller.abort();
     release.resolve({ kind: 'grant', payload: { type: 'oauth', access: 'SECRET', expires: 1 } });
-    const value = await pending;
+    await assert.rejects(pending, error => error.code === 'CANCELLED');
     assert.equal(ensures, 0);
-    assert.equal(value.quota.state, 'unloaded');
+  } finally { api.dispose(); }
+});
+
+// small/spec — one cancelled narrow reader must not clear the flight another reader shares.
+test('a cancelled narrow reader leaves the shared quota flight to the other reader', async () => {
+  const started = Promise.withResolvers(), release = Promise.withResolvers();
+  let upstream = 0;
+  const quota = createAccountQuota({
+    readIdentity: async () => 'IDENTITY', resolveIdentity: async () => 'IDENTITY',
+    loadModels: async () => { upstream++; started.resolve(); return release.promise; },
+  });
+  const api = createSubscriptions({
+    credentials: { readRecord: async () => ({ kind: 'grant', payload: { type: 'oauth', access: 'SECRET', expires: 1 } }) },
+    authorization: {}, keyFor: id => id, llm: {}, catalog: [{ id: 'kimi-coding', auth: { oauth: {} }, getModels: () => [] }],
+    accountQuotas: new Map([['kimi-coding', quota]]),
+  });
+  try {
+    const controller = new AbortController();
+    const first = api.quotaState('kimi-coding', controller.signal);
+    const second = api.quotaState('kimi-coding');
+    await started.promise;
+    controller.abort();
+    await assert.rejects(first, error => error.code === 'CANCELLED');
+    release.resolve({ windows: [{ id: 'limit_5h', usedPercent: 10, resetsAt: null, windowSeconds: 18000 }] });
+    const value = await second;
+    assert.equal(upstream, 1, 'both readers shared one upstream query');
+    assert.equal(value.quota.state, 'ready');
+    assert.equal(value.quota.windows[0].usedPercent, 10);
+  } finally { api.dispose(); }
+});
+
+// small/spec — narrow status respects a logout that lands while the model catalog is still loading.
+test('narrow status reads the credential again after the model barrier', async () => {
+  const started = Promise.withResolvers(), release = Promise.withResolvers();
+  const record = { kind: 'grant', payload: { type: 'oauth', access: 'SECRET', expires: 1 } };
+  const records = new Map([['kimi-coding', record]]);
+  const models = { ensure: async () => { started.resolve(); await release.promise; }, clear() {},
+    status: () => ({ source: 'account', state: 'unloaded', error: null, updatedAt: null }) };
+  const api = createSubscriptions({
+    credentials: { readRecord: async key => records.get(key) },
+    authorization: { describe: () => ({ methods: [] }) }, keyFor: id => id, llm: {}, catalog: [{ id: 'kimi-coding', auth: { oauth: {} }, getModels: () => [] }],
+    accountModels: new Map([['kimi-coding', models]]),
+    accountQuotas: new Map([['kimi-coding', { clear() {}, ensure: () => assert.fail('narrow status must not read quota') }]]),
+  });
+  try {
+    const pending = createHttpHandler(api)(new Request('http://localhost/api/subscriptions-lite?quota=0'));
+    await started.promise;
+    records.delete('kimi-coding');
+    release.resolve();
+    const body = await (await pending).json();
+    const provider = body.providers.find(item => item.id === 'kimi-coding');
+    assert.equal(provider.configured, false);
+    assert.ok(!('quota' in provider));
   } finally { api.dispose(); }
 });

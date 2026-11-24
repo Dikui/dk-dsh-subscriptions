@@ -8,6 +8,7 @@ const window = (id, usedPercent, resetsAt, windowSeconds) => ({ id, usedPercent,
 const ready = (windows, updatedAt = '2026-11-10T15:24:57Z') => ({ source: 'account', state: 'ready', error: null, updatedAt: at(updatedAt), stale: false, windows });
 const unavailable = { source: 'none', state: 'unsupported', error: null, updatedAt: null, stale: false, windows: [] };
 const unloaded = { source: 'none', state: 'unloaded', error: null, updatedAt: null, stale: false, windows: [] };
+const accountUnloaded = { source: 'account', state: 'unloaded', error: null, updatedAt: null, stale: false, windows: [] };
 
 const openai = ready([window('limit_5h', 25, '2026-11-11T02:00:00Z', 18000), window('limit_7d', 60, '2026-11-16T02:00:00Z', 604800)]);
 const kimi = ready([window('limit_5h', 10, '2026-11-11T02:00:00Z', 18000)]);
@@ -18,7 +19,7 @@ function reply(value) {
   return { ok: true, json: async () => JSON.parse(JSON.stringify(value)) };
 }
 
-function fixture({ fail = false, failQuotaOnce = false, opencodeQuota = false, xaiConfigured = false, xaiQuota = unloaded } = {}) {
+function fixture({ fail = false, failQuotaOnce = false, revokeOnForce = false, opencodeQuota = false, xaiConfigured = false, xaiQuota = unloaded } = {}) {
   const calls = [];
   const quotas = { 'openai-codex': openai, 'kimi-coding': kimi, xai: xaiQuota,
     'opencode-go': opencodeQuota ? opencode : unloaded };
@@ -29,6 +30,10 @@ function fixture({ fail = false, failQuotaOnce = false, opencodeQuota = false, x
     if (fail) throw new Error('REQUEST_FAILED');
     if (input.action === 'quota') {
       if (pendingFailure) { pendingFailure = false; return { ok: false, json: async () => ({ error: 'QUOTA_FAILED' }) }; }
+      if (revokeOnForce && input.provider === 'openai-codex') {
+        quotas[input.provider] = accountUnloaded;
+        return { ok: false, json: async () => ({ error: 'MISSING_CREDENTIAL' }) };
+      }
       const source = quotas[input.provider];
       if (source.source !== 'account' || source.state === 'unsupported') {
         return { ok: false, json: async () => ({ error: 'QUOTA_UNSUPPORTED' }) };
@@ -36,7 +41,9 @@ function fixture({ fail = false, failQuotaOnce = false, opencodeQuota = false, x
       quotas[input.provider] = { ...source, windows: source.windows.map(item => ({ ...item, usedPercent: Math.min(100, item.usedPercent + 10) })) };
       return reply({ ok: true });
     }
-    const configured = input.provider === 'xai' ? xaiConfigured : input.provider === 'opencode-go' ? opencodeQuota : true;
+    const configured = input.provider === 'xai' ? xaiConfigured
+      : input.provider === 'opencode-go' ? opencodeQuota
+      : quotas[input.provider].state !== 'unloaded';
     return reply({ provider: input.provider, configured, quota: quotas[input.provider] });
   };
   return { fetch, calls, quotas };
@@ -179,5 +186,57 @@ test('failures read as unavailable and the popover says so instead of a percenta
     trigger(panel).props.onClick(); await panel.flush();
     const text = panel.text(dialog(panel));
     assert.ok(text.includes('OpenAI · ChatGPT') && text.includes('请求未完成'), text);
+  } finally { panel.dispose(); }
+});
+
+test('a revoked force drops eligibility and clears the error row with one narrow reread', async () => {
+  const f = fixture({ revokeOnForce: true });
+  const panel = await panelHarness({ ...f, quota: true });
+  try {
+    trigger(panel).props.onClick(); await panel.flush();
+    f.calls.length = 0;
+    const button = () => panel.nodes(dialog(panel)).find(node => node.type === 'button' && panel.text(node).startsWith('Refresh quota'));
+    button().props.onClick(); await panel.flush();
+    const text = panel.text(dialog(panel));
+    assert.ok(!text.includes('OpenAI · ChatGPT'), 'the revoked account row is gone');
+    assert.ok(!text.includes('Could not fetch'), text);
+    assert.deepEqual(f.calls.filter(call => call.provider === 'openai-codex').map(call => call.action), ['quota', 'quota-state']);
+    f.calls.length = 0;
+    button().props.onClick(); await panel.flush();
+    assert.deepEqual(f.calls.filter(call => call.provider === 'openai-codex').map(call => call.action), ['quota-state']);
+  } finally { panel.dispose(); }
+});
+
+test('a superseded refresh cannot rewrite force eligibility', async () => {
+  const calls = [];
+  const stale = Promise.withResolvers();
+  let phase = 'mount';
+  const snapshot = configured => ({ provider: 'openai-codex', configured, quota: configured ? openai : unloaded });
+  const fetch = async (url, options) => {
+    const input = JSON.parse(options.body); calls.push(input);
+    if (input.provider !== 'openai-codex') return reply({ provider: input.provider, configured: false, quota: unloaded });
+    if (input.action === 'quota') {
+      if (phase === 'stale') { await stale.promise; return reply({ ok: true }); }
+      if (phase === 'fail') return { ok: false, json: async () => ({ error: 'QUOTA_FAILED' }) };
+      return reply({ ok: true });
+    }
+    return reply(snapshot(phase !== 'stale'));
+  };
+  const panel = await panelHarness({ fetch, quota: true });
+  try {
+    trigger(panel).props.onClick(); await panel.flush();
+    const button = () => panel.nodes(dialog(panel)).find(node => node.type === 'button' && panel.text(node).startsWith('Refresh quota'));
+    phase = 'stale';
+    const first = button().props.onClick();
+    phase = 'fail';
+    const second = button().props.onClick();
+    await second; await panel.flush();
+    phase = 'stale';
+    stale.resolve(); await first; await panel.flush();
+    calls.length = 0;
+    phase = 'retry';
+    button().props.onClick(); await panel.flush();
+    assert.deepEqual(calls.filter(call => call.provider === 'openai-codex').map(call => call.action), ['quota', 'quota-state'],
+      'eligibility comes from the accepted generation, not the superseded response');
   } finally { panel.dispose(); }
 });

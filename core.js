@@ -178,15 +178,22 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
   async function quotaStatus(id, signal, isConfigured) {
     const quota = accountQuotas.get(id);
     if (!quota) return unsupportedQuota();
-    if (disposed || signal?.aborted) return quota.status();
+    // A cancelled reader discards its own response. It must not clear the shared
+    // metadata query other readers are still waiting on (see models.js ensure).
+    if (disposed) return quota.status();
+    if (signal?.aborted) fail('CANCELLED');
     if (isConfigured === undefined) isConfigured = await configured(id, signal);
+    if (disposed) return quota.status();
+    if (signal?.aborted) fail('CANCELLED');
     // Connectivity may have changed while the credential was read; never mix a signed-out account with a cached snapshot.
-    if (disposed || signal?.aborted || !isConfigured || attempts.get(id)?.state === 'running' || loggingOut.has(id)) {
+    if (!isConfigured || attempts.get(id)?.state === 'running' || loggingOut.has(id)) {
       quota.clear();
       return quota.status();
     }
     try { await quota.ensure({ signal }); } catch { /* Quota failure never hides auth or models. */ }
-    if (disposed || signal?.aborted || attempts.get(id)?.state === 'running' || loggingOut.has(id)) quota.clear();
+    if (disposed) return quota.status();
+    if (signal?.aborted) fail('CANCELLED');
+    if (attempts.get(id)?.state === 'running' || loggingOut.has(id)) { quota.clear(); return quota.status(); }
     return quota.status();
   }
   // Narrow read for the composer badge: no catalog, auth attempt or account identity.
@@ -225,9 +232,11 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
       if (error) modelCatalog = { ...modelCatalog, source: 'account', state: 'error', error, updatedAt: null };
     }
     let quota;
+    if (includeQuota) await quotaStatus(p.id, signal);
+    // A logout can land while this read waits on the model catalog; report the
+    // credential that is current when the result is built, not the one from entry.
+    record = await credentials.readRecord(keyFor(p.id));
     if (includeQuota) {
-      await quotaStatus(p.id, signal);
-      record = await credentials.readRecord(keyFor(p.id));
       const quotaCache = accountQuotas.get(p.id);
       if (quotaCache && (!oauthRecord(record) || disposed || attempts.get(p.id)?.state === 'running' || loggingOut.has(p.id))) quotaCache.clear();
       quota = quotaCache?.status() ?? unsupportedQuota();
