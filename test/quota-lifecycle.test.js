@@ -5,7 +5,7 @@ import { createAccountModels, createAccountQuota } from '../models.js';
 import { accountQuotaSources } from '../quota-sources.js';
 
 // small/spec — status/HTTP public seam; memory credentials and synthetic external metadata.
-function fixture() {
+function fixture({ suspendQuota = false } = {}) {
   const records = new Map(); const requests = [];
   const keyFor = id => `llm-pi-ai/${id}`;
   const grant = () => ({ kind: 'grant', payload: { type: 'oauth', access: 'ACCESS-SECRET', accountId: 'ACCOUNT-SECRET', expires: 3600000 } });
@@ -23,6 +23,7 @@ function fixture() {
       readCredential: async () => records.get(keyFor(id))?.payload,
       getAuth: async () => ({ source: 'OAuth', auth: { apiKey: records.get(keyFor(id))?.payload?.access } }),
       fetchCatalog: async (url, { signal }) => { requests.push([id, url, signal]);
+        if (suspendQuota) return new Promise(() => {});
         return denyQuota ? new Response('SECRET', { status: 403 }) : Response.json(id === 'openai-codex'
           ? { rate_limit: { primary_window: { used_percent: 25 } } } : { usages: { limit_5h: { used_ratio: 0.5 } } });
       },
@@ -36,7 +37,8 @@ function fixture() {
   const post = (provider, action = 'quota') => createHttpHandler(api)(new Request('http://localhost/api/subscriptions-lite', {
     method: 'POST', headers: { 'content-type': 'application/json', 'x-subscriptions-lite': '1' }, body: JSON.stringify({ provider, action }),
   }));
-  return { api, post, records, requests, accountQuotas, setGrant: id => records.set(keyFor(id), grant()), deny: () => { denyQuota = true; } };
+  const get = (query = '') => createHttpHandler(api)(new Request(`http://localhost/api/subscriptions-lite${query}`));
+  return { api, post, get, records, requests, accountQuotas, setGrant: id => records.set(keyFor(id), grant()), deny: () => { denyQuota = true; } };
 }
 
 test('status and explicit HTTP quota refresh share metadata without hiding model or auth status', async () => {
@@ -139,4 +141,104 @@ test('disposing during status model discovery cannot start a new quota request',
   const status = api.status(); await started.promise;
   api.dispose(); release.resolve();
   assert.equal((await status).providers[1].quota.state, 'unloaded');
+});
+
+// small/spec — the settings panel must never wait on quota metadata; only the explicit sidebar read does.
+test('narrow panel status omits quota and leaves a suspended quota source untouched', async () => {
+  const f = fixture({ suspendQuota: true });
+  try {
+    for (const id of ['openai-codex', 'kimi-coding', 'xai']) f.setGrant(id);
+    const response = await f.get('?quota=0');
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.deepEqual(body.providers.map(provider => provider.id), ['openai-codex', 'kimi-coding', 'xai']);
+    assert.ok(body.providers.every(provider => !('quota' in provider)), 'the narrow payload must not carry quota or an old snapshot');
+    assert.ok(body.providers.every(provider => provider.configured && provider.models.length === 1), 'auth, attempt and catalog stay complete');
+    assert.ok(body.providers.every(provider => provider.modelCatalog.state === 'ready'));
+    assert.equal(f.requests.length, 0, 'a narrow read must not call the quota source');
+  } finally { f.api.dispose(); }
+});
+
+test('the parameterless status request still carries quota', async () => {
+  const f = fixture();
+  try {
+    for (const id of ['openai-codex', 'kimi-coding', 'xai']) f.setGrant(id);
+    const body = await (await f.get()).json();
+    assert.equal(body.providers[0].quota.state, 'partial');
+    assert.equal(body.providers[1].quota.windows[0].usedPercent, 50);
+    assert.equal(body.providers[2].quota.state, 'unsupported');
+    assert.equal(f.requests.length, 2);
+  } finally { f.api.dispose(); }
+});
+
+// small/spec — one credential read must feed both configured and quota validity; a stale cache cannot answer for a signed-out account.
+test('narrow quota state reads connectivity once and clears an old snapshot', async () => {
+  let reads = 0, ensures = 0, cleared = 0;
+  const quota = {
+    state: 'ready', windows: [{ id: 'primary', usedPercent: 25, windowSeconds: null, resetsAt: null }],
+    clear() { cleared++; this.state = 'unloaded'; this.windows = []; },
+    ensure() { ensures++; return Promise.resolve(); },
+    status() { return { source: 'account', scope: 'account', state: this.state, error: null,
+      updatedAt: this.state === 'ready' ? 1 : null, stale: false, windows: this.windows }; },
+  };
+  const api = createSubscriptions({
+    credentials: { readRecord: async () => { reads++; return reads === 1 ? undefined
+      : { kind: 'grant', payload: { type: 'oauth', access: 'SECRET', expires: 1 } }; } },
+    authorization: {}, catalog: [{ id: 'kimi-coding', auth: { oauth: {} } }], keyFor: id => id, llm: {},
+    accountQuotas: new Map([['kimi-coding', quota]]),
+  });
+  try {
+    const value = await api.quotaState('kimi-coding');
+    assert.equal(reads, 1);
+    assert.equal(ensures, 0);
+    assert.equal(value.configured, false);
+    assert.equal(value.quota.state, 'unloaded');
+    assert.deepEqual(value.quota.windows, []);
+    assert.ok(cleared >= 1);
+  } finally { api.dispose(); }
+});
+
+// small/spec — a sidebar read that finishes while unloading must not start a quota request.
+test('disposing during narrow quota credential lookup cannot query quota', async () => {
+  const started = Promise.withResolvers(), release = Promise.withResolvers();
+  let ensures = 0;
+  const quota = { clear() {}, ensure() { ensures++; return Promise.resolve(); },
+    status: () => ({ source: 'account', scope: 'account', state: 'unloaded', error: null, updatedAt: null, stale: false, windows: [] }) };
+  const api = createSubscriptions({
+    credentials: { readRecord: async () => { started.resolve(); return release.promise; } },
+    authorization: {}, catalog: [{ id: 'kimi-coding', auth: { oauth: {} } }], keyFor: id => id, llm: {},
+    accountQuotas: new Map([['kimi-coding', quota]]),
+  });
+  try {
+    const pending = api.quotaState('kimi-coding');
+    await started.promise;
+    api.dispose();
+    release.resolve({ kind: 'grant', payload: { type: 'oauth', access: 'SECRET', expires: 1 } });
+    const value = await pending;
+    assert.equal(ensures, 0);
+    assert.equal(value.configured, true);
+    assert.equal(value.quota.state, 'unloaded');
+  } finally { api.dispose(); }
+});
+
+test('aborting during narrow quota credential lookup cannot query quota either', async () => {
+  const started = Promise.withResolvers(), release = Promise.withResolvers();
+  let ensures = 0;
+  const quota = { clear() {}, ensure() { ensures++; return Promise.resolve(); },
+    status: () => ({ source: 'account', scope: 'account', state: 'unloaded', error: null, updatedAt: null, stale: false, windows: [] }) };
+  const api = createSubscriptions({
+    credentials: { readRecord: async () => { started.resolve(); return release.promise; } },
+    authorization: {}, catalog: [{ id: 'kimi-coding', auth: { oauth: {} } }], keyFor: id => id, llm: {},
+    accountQuotas: new Map([['kimi-coding', quota]]),
+  });
+  try {
+    const controller = new AbortController();
+    const pending = api.quotaState('kimi-coding', controller.signal);
+    await started.promise;
+    controller.abort();
+    release.resolve({ kind: 'grant', payload: { type: 'oauth', access: 'SECRET', expires: 1 } });
+    const value = await pending;
+    assert.equal(ensures, 0);
+    assert.equal(value.quota.state, 'unloaded');
+  } finally { api.dispose(); }
 });

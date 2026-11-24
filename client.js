@@ -199,8 +199,8 @@ window.__ModuleLoader__.load({
           && ((p.modelCatalog.source === 'account' && p.configured && p.modelCatalog.state === 'ready') || !p.models.length)
           && (p.attempt === null || validAttempt(p.attempt)));
     }
-    async function request(body, signal, keepalive = false) {
-      const response = await fetch('/api/subscriptions-lite', {
+    async function request(body, signal, keepalive = false, url = '/api/subscriptions-lite') {
+      const response = await fetch(url, {
         method: body ? 'POST' : 'GET', credentials: 'same-origin', cache: 'no-store', signal, keepalive,
         ...(body ? { headers: { 'Content-Type': 'application/json', 'X-Subscriptions-Lite': '1' }, body: JSON.stringify(body) } : {}),
       });
@@ -312,12 +312,23 @@ window.__ModuleLoader__.load({
       const [position, setPosition] = React.useState(null);
       const [busy, setBusy] = React.useState(false);
       const generation = React.useRef(0), active = React.useRef(null), trigger = React.useRef(null), closeTimer = React.useRef(null);
-      async function send(id, force, signal) {
+      const capability = React.useRef(new Map());
+      async function post(id, action, signal) {
         const response = await fetch('/api/subscriptions-lite', { method: 'POST', credentials: 'same-origin', cache: 'no-store', signal,
           headers: { 'Content-Type': 'application/json', 'X-Subscriptions-Lite': '1' },
-          body: JSON.stringify({ action: force ? 'quota' : 'quota-state', provider: id }) });
+          body: JSON.stringify({ action, provider: id }) });
         const value = await response.json();
         if (!response.ok || value?.error) throw new Error(typeof value?.error === 'string' ? value.error : 'REQUEST_FAILED');
+        return value;
+      }
+      async function send(id, force, signal) {
+        // A force request only acknowledges the upstream attempt; the display always comes from a following narrow read
+        // in the same generation, so a failed attempt never falls back to the previous account's snapshot.
+        if (force) {
+          const ack = await post(id, 'quota', signal);
+          if (ack?.ok !== true) throw new Error('BAD_RESPONSE');
+        }
+        const value = await post(id, 'quota-state', signal);
         if (value.provider !== id || typeof value.configured !== 'boolean' || !value.quota
           || !validQuota(value.quota, value.configured)) throw new Error('BAD_RESPONSE');
         return value;
@@ -326,11 +337,17 @@ window.__ModuleLoader__.load({
         const version = ++generation.current;
         active.current?.abort();
         const controller = new AbortController(); active.current = controller;
-        const known = new Map((items ?? []).map(item => [item.id, Boolean(item.configured)]));
         setBusy(true);
         const results = await Promise.all(quotaProviders.map(async id => {
-          try { const value = await send(id, force && known.get(id) === true, controller.signal); return { id, ...value }; }
-          catch (cause) { return { id, error: controller.signal.aborted ? 'ABORTED' : cause.message }; }
+          const latest = (items ?? []).find(item => item.id === id);
+          const previous = latest?.quota
+            ? { configured: latest.configured, supported: latest.quota.source === 'account' }
+            : capability.current.get(id);
+          try {
+            const value = await send(id, force && previous?.configured === true && previous?.supported === true, controller.signal);
+            capability.current.set(id, { configured: value.configured, supported: value.quota.source === 'account' });
+            return { id, ...value };
+          } catch (cause) { return { id, error: controller.signal.aborted ? 'ABORTED' : cause.message }; }
         }));
         if (generation.current !== version) return;
         setBusy(false);
@@ -579,7 +596,7 @@ window.__ModuleLoader__.load({
               pending = true;
               const currentRevision = revision;
               try {
-                const data = await request(null, controller.signal);
+                const data = await request(null, controller.signal, false, '/api/subscriptions-lite?quota=0');
                 if (!validStatus(data)) throw new Error('BAD_RESPONSE');
                 if (!active) return;
                 if (currentRevision !== revision) { queued = true; return; }

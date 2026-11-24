@@ -18,24 +18,28 @@ function reply(value) {
   return { ok: true, json: async () => JSON.parse(JSON.stringify(value)) };
 }
 
-function fixture({ fail = false, opencodeQuota = false, xaiConfigured = false, xaiQuota = unloaded } = {}) {
+function fixture({ fail = false, failQuotaOnce = false, opencodeQuota = false, xaiConfigured = false, xaiQuota = unloaded } = {}) {
   const calls = [];
+  const quotas = { 'openai-codex': openai, 'kimi-coding': kimi, xai: xaiQuota,
+    'opencode-go': opencodeQuota ? opencode : unloaded };
+  let pendingFailure = failQuotaOnce;
   const fetch = async (url, options) => {
     const input = JSON.parse(options.body);
     calls.push(input);
     if (fail) throw new Error('REQUEST_FAILED');
-    const current = { 'openai-codex': { provider: 'openai-codex', configured: true, quota: openai },
-      'kimi-coding': { provider: 'kimi-coding', configured: true, quota: kimi },
-      xai: { provider: 'xai', configured: xaiConfigured, quota: xaiQuota },
-      'opencode-go': { provider: 'opencode-go', configured: opencodeQuota, quota: opencodeQuota ? opencode : unloaded } };
     if (input.action === 'quota') {
-      const source = input.provider === 'opencode-go' ? opencode : input.provider === 'xai' ? xaiQuota : openai;
-      const windows = source.windows.map(item => ({ ...item, usedPercent: Math.min(100, item.usedPercent + 10) }));
-      return reply({ ...current[input.provider], configured: true, quota: { ...source, windows } });
+      if (pendingFailure) { pendingFailure = false; return { ok: false, json: async () => ({ error: 'QUOTA_FAILED' }) }; }
+      const source = quotas[input.provider];
+      if (source.source !== 'account' || source.state === 'unsupported') {
+        return { ok: false, json: async () => ({ error: 'QUOTA_UNSUPPORTED' }) };
+      }
+      quotas[input.provider] = { ...source, windows: source.windows.map(item => ({ ...item, usedPercent: Math.min(100, item.usedPercent + 10) })) };
+      return reply({ ok: true });
     }
-    return reply(current[input.provider]);
+    const configured = input.provider === 'xai' ? xaiConfigured : input.provider === 'opencode-go' ? opencodeQuota : true;
+    return reply({ provider: input.provider, configured, quota: quotas[input.provider] });
   };
-  return { fetch, calls };
+  return { fetch, calls, quotas };
 }
 
 const trigger = panel => panel.nodes().find(node => node.props?.className === 'slq-trigger');
@@ -117,7 +121,7 @@ test('accounts without a quota endpoint are omitted from the gauge and popover',
   } finally { panel.dispose(); }
 });
 
-test('refresh forces quota for connected accounts and keeps others on the narrow read', async () => {
+test('refresh forces connected supported accounts then reads their fresh snapshot', async () => {
   const f = fixture();
   const panel = await panelHarness({ ...f, quota: true });
   try {
@@ -126,9 +130,44 @@ test('refresh forces quota for connected accounts and keeps others on the narrow
     const button = panel.nodes(dialog(panel)).find(node => node.type === 'button' && panel.text(node).startsWith('Refresh quota'));
     assert.ok(button, 'refresh button in the popover');
     button.props.onClick(); await panel.flush();
-    assert.deepEqual(f.calls, [{ action: 'quota', provider: 'openai-codex' }, { action: 'quota', provider: 'kimi-coding' },
-      { action: 'quota-state', provider: 'xai' }, { action: 'quota-state', provider: 'opencode-go' }]);
+    const calls = provider => f.calls.filter(call => call.provider === provider).map(call => call.action);
+    assert.deepEqual(calls('openai-codex'), ['quota', 'quota-state']);
+    assert.deepEqual(calls('kimi-coding'), ['quota', 'quota-state']);
+    assert.deepEqual(calls('xai'), ['quota-state']);
+    assert.deepEqual(calls('opencode-go'), ['quota-state']);
     assert.ok(label(panel).includes('30%'), label(panel));
+  } finally { panel.dispose(); }
+});
+
+test('a connected account without a quota endpoint is never force-refreshed and stays error-free', async () => {
+  const f = fixture({ xaiConfigured: true, xaiQuota: unavailable });
+  const panel = await panelHarness({ ...f, quota: true });
+  try {
+    trigger(panel).props.onClick(); await panel.flush();
+    const callsBefore = f.calls.length;
+    const button = panel.nodes(dialog(panel)).find(node => node.type === 'button' && panel.text(node).startsWith('Refresh quota'));
+    button.props.onClick(); await panel.flush();
+    assert.deepEqual(f.calls.slice(callsBefore).filter(call => call.provider === 'xai').map(call => call.action), ['quota-state']);
+    const text = panel.text(dialog(panel));
+    assert.ok(!text.includes('Grok'), text);
+    assert.ok(!text.includes('quota endpoint') && !text.includes('额度接口'), text);
+  } finally { panel.dispose(); }
+});
+
+test('a transient quota failure still allows an immediate retry', async () => {
+  const f = fixture({ failQuotaOnce: true });
+  const panel = await panelHarness({ ...f, quota: true });
+  try {
+    trigger(panel).props.onClick(); await panel.flush();
+    const button = () => panel.nodes(dialog(panel)).find(node => node.type === 'button' && panel.text(node).startsWith('Refresh quota'));
+    button().props.onClick(); await panel.flush();
+    assert.ok(panel.text(dialog(panel)).includes('Could not fetch quota'), panel.text(dialog(panel)));
+    button().props.onClick(); await panel.flush();
+    const actions = f.calls.filter(call => call.provider === 'openai-codex').map(call => call.action);
+    assert.equal(actions.filter(action => action === 'quota').length, 2, 'the failed force and the retry each asked the vendor');
+    assert.deepEqual(actions.slice(-2), ['quota', 'quota-state'], 'the retry reads the fresh snapshot');
+    assert.ok(label(panel).includes('30%'), label(panel));
+    assert.ok(!panel.text(dialog(panel)).includes('Could not fetch quota'));
   } finally { panel.dispose(); }
 });
 

@@ -19,7 +19,7 @@ function flowServer(provider = 'kimi-coding') {
     fail() { attempt = { ...attempt, state: 'failed', error: 'REQUEST_FAILED' }; },
     restore() { attempt = { id: 'existing-attempt', state: 'running', notices: [notice], prompt: null }; },
     fetch: async (path, options = {}) => {
-      assert.equal(path, '/api/subscriptions-lite');
+      assert.equal(path, options.method === 'POST' ? '/api/subscriptions-lite' : '/api/subscriptions-lite?quota=0');
       if (options.method === 'POST') {
         const body = JSON.parse(options.body);
         events.push(body.action);
@@ -34,6 +34,33 @@ function flowServer(provider = 'kimi-coding') {
   };
 }
 
+// small/spec — status reads from the settings panel must use the narrow quota-free path, including auth polling.
+test('settings panel reads and polls the narrow quota-free status path', async () => {
+  const reads = []; let attempt = null;
+  const panel = await panelHarness({ fetch: async (path, options = {}) => {
+    reads.push([path, options.method]);
+    if (options.method === 'POST') {
+      const body = JSON.parse(options.body);
+      if (body.action === 'login') {
+        attempt = { id: 'new-attempt', state: 'running', notices: [], prompt: null };
+        return Response.json(attempt);
+      }
+      return Response.json({ ok: true });
+    }
+    return Response.json(initialStatus(attempt));
+  } });
+  try {
+    await panel.click('Connect');
+    await panel.poll();
+    const gets = reads.filter(([, method]) => method === 'GET');
+    assert.ok(gets.length >= 2, JSON.stringify(reads));
+    assert.ok(gets.every(([path]) => path === '/api/subscriptions-lite?quota=0'), JSON.stringify(reads));
+    const posts = reads.filter(([, method]) => method === 'POST');
+    assert.ok(posts.length >= 1);
+    assert.ok(posts.every(([path]) => path === '/api/subscriptions-lite'), JSON.stringify(reads));
+  } finally { panel.dispose(); }
+});
+
 // small/regression — user requested separate title-only subpages; status/HTTP are synthetic and billing stays available in collapsed details.
 test('model connections and data tools occupy separate bilingual subpages', async () => {
   for (const language of ['en', 'zh']) {
@@ -43,7 +70,7 @@ test('model connections and data tools occupy separate bilingual subpages', asyn
         kimiDatasource: { enabled }, grokXSearch: { enabled: !enabled, reason: enabled ? 'NOT_ENABLED' : null },
       };
       const panel = await panelHarness({ language, fetch: async (path, options) => {
-        assert.equal(path, '/api/subscriptions-lite'); assert.equal(options.method, 'GET'); requests++;
+        assert.equal(path, '/api/subscriptions-lite?quota=0'); assert.equal(options.method, 'GET'); requests++;
         return Response.json(state); // Navigation must never issue a Datasource or inference request.
       } });
       try {

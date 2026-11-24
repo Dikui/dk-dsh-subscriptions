@@ -175,23 +175,25 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     await models.ensure(options);
   }
   const unsupportedQuota = () => ({ source: 'none', state: 'unsupported', error: 'QUOTA_UNSUPPORTED', updatedAt: null, stale: false, windows: [] });
-  async function quotaStatus(id, signal) {
+  async function quotaStatus(id, signal, isConfigured) {
     const quota = accountQuotas.get(id);
     if (!quota) return unsupportedQuota();
     if (disposed || signal?.aborted) return quota.status();
-    if (!(await configured(id, signal)) || attempts.get(id)?.state === 'running' || loggingOut.has(id)) {
+    if (isConfigured === undefined) isConfigured = await configured(id, signal);
+    // Connectivity may have changed while the credential was read; never mix a signed-out account with a cached snapshot.
+    if (disposed || signal?.aborted || !isConfigured || attempts.get(id)?.state === 'running' || loggingOut.has(id)) {
       quota.clear();
       return quota.status();
     }
     try { await quota.ensure({ signal }); } catch { /* Quota failure never hides auth or models. */ }
-    if (attempts.get(id)?.state === 'running' || loggingOut.has(id)) quota.clear();
+    if (disposed || signal?.aborted || attempts.get(id)?.state === 'running' || loggingOut.has(id)) quota.clear();
     return quota.status();
   }
   // Narrow read for the composer badge: no catalog, auth attempt or account identity.
   async function quotaState(id, signal) {
     provider(id);
     const isConfigured = await configured(id, signal);
-    return { provider: id, configured: isConfigured, quota: await quotaStatus(id, signal) };
+    return { provider: id, configured: isConfigured, quota: await quotaStatus(id, signal, isConfigured) };
   }
   async function refreshQuota(id, signal) {
     provider(id);
@@ -205,34 +207,43 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     await accountQuotas.get(id).ensure({ force: true, signal });
     return { ok: true };
   }
-  async function status(signal) {
-    return { vendorTools, providers: await Promise.all(PROVIDERS.map(async p => {
-      if (!p.route || !supported.has(p.id)) return { ...p, available: false, configured: false, credentialKind: null, models: [],
-        modelCatalog: { source: 'none', state: 'unavailable', error: null, updatedAt: null }, quota: unsupportedQuota(), attempt: null };
-      let record = await credentials.readRecord(keyFor(p.id));
-      const flow = authorization.describe(keyFor(p.id));
-      let modelCatalog = { source: 'none', state: 'unavailable', error: 'MODEL_CATALOG_UNAVAILABLE', updatedAt: null };
-      if (accountModels.get(p.id)) {
-        const models = accountModels.get(p.id);
-        if (!oauthRecord(record)) models?.clear();
-        let error;
-        if (oauthRecord(record) && attempts.get(p.id)?.state !== 'running' && !loggingOut.has(p.id)) {
-          try { await ensureModels(p.id, { signal }); } catch (cause) { error = safeError(cause).error; }
-        }
-        modelCatalog = models?.status() ?? { source: 'account', state: 'unloaded', error: null, updatedAt: null };
-        if (error) modelCatalog = { ...modelCatalog, source: 'account', state: 'error', error, updatedAt: null };
+  async function providerStatus(p, signal, includeQuota) {
+    if (!p.route || !supported.has(p.id)) return { ...p, available: false, configured: false, credentialKind: null, models: [],
+      modelCatalog: { source: 'none', state: 'unavailable', error: null, updatedAt: null },
+      ...(includeQuota ? { quota: unsupportedQuota() } : {}), attempt: null };
+    let record = await credentials.readRecord(keyFor(p.id));
+    const flow = authorization.describe(keyFor(p.id));
+    let modelCatalog = { source: 'none', state: 'unavailable', error: 'MODEL_CATALOG_UNAVAILABLE', updatedAt: null };
+    if (accountModels.get(p.id)) {
+      const models = accountModels.get(p.id);
+      if (!oauthRecord(record)) models?.clear();
+      let error;
+      if (oauthRecord(record) && attempts.get(p.id)?.state !== 'running' && !loggingOut.has(p.id)) {
+        try { await ensureModels(p.id, { signal }); } catch (cause) { error = safeError(cause).error; }
       }
+      modelCatalog = models?.status() ?? { source: 'account', state: 'unloaded', error: null, updatedAt: null };
+      if (error) modelCatalog = { ...modelCatalog, source: 'account', state: 'error', error, updatedAt: null };
+    }
+    let quota;
+    if (includeQuota) {
       await quotaStatus(p.id, signal);
       record = await credentials.readRecord(keyFor(p.id));
       const quotaCache = accountQuotas.get(p.id);
       if (quotaCache && (!oauthRecord(record) || disposed || attempts.get(p.id)?.state === 'running' || loggingOut.has(p.id))) quotaCache.clear();
-      const quota = quotaCache?.status() ?? unsupportedQuota();
-      const showModels = modelCatalog.source === 'account' && oauthRecord(record) && modelCatalog.state === 'ready' && attempts.get(p.id)?.state !== 'running';
-      return { ...p, available: !!flow?.methods.some(method => method.id === 'oauth'),
-        configured: !!oauthRecord(record), credentialKind: record?.kind ?? null,
-        models: showModels ? catalog.find(item => item.id === p.id).getModels().map(({ id, name }) => ({ id, name })) : [],
-        modelCatalog, quota, attempt: publicAttempt(attempts.get(p.id)) };
-    })) };
+      quota = quotaCache?.status() ?? unsupportedQuota();
+    }
+    const showModels = modelCatalog.source === 'account' && oauthRecord(record) && modelCatalog.state === 'ready' && attempts.get(p.id)?.state !== 'running';
+    return { ...p, available: !!flow?.methods.some(method => method.id === 'oauth'),
+      configured: !!oauthRecord(record), credentialKind: record?.kind ?? null,
+      models: showModels ? catalog.find(item => item.id === p.id).getModels().map(({ id, name }) => ({ id, name })) : [],
+      modelCatalog, ...(includeQuota ? { quota } : {}), attempt: publicAttempt(attempts.get(p.id)) };
+  }
+  async function status(signal) {
+    return { vendorTools, providers: await Promise.all(PROVIDERS.map(p => providerStatus(p, signal, true))) };
+  }
+  // Settings panel status: auth, attempts, models and tools, but never quota metadata.
+  async function panelStatus(signal) {
+    return { vendorTools, providers: await Promise.all(PROVIDERS.map(p => providerStatus(p, signal, false))) };
   }
   async function refreshModels(id, signal) {
     authProvider(id);
@@ -346,7 +357,7 @@ export function createSubscriptions({ authorization, credentials, llm, catalog, 
     for (const models of accountModels.values()) models?.clear();
     for (const quota of accountQuotas.values()) quota?.clear();
   }
-  return { status, login, answer, cancel, logout, test, refreshModels, refreshQuota, quotaState, dispose };
+  return { status, panelStatus, login, answer, cancel, logout, test, refreshModels, refreshQuota, quotaState, dispose };
 }
 
 // Connection authenticates and validates the original HTTP authority before
@@ -366,7 +377,10 @@ export function createHttpHandler(api) {
   return async request => {
     const json = (body, status = 200) => Response.json(body, { status, headers: { 'Cache-Control': 'no-store' } });
     try {
-      if (request.method === 'GET') return json(await api.status(request.signal));
+      if (request.method === 'GET') {
+        const narrow = new URL(request.url, 'http://localhost').searchParams.get('quota') === '0';
+        return json(await (narrow ? api.panelStatus(request.signal) : api.status(request.signal)));
+      }
       if (request.method !== 'POST') return json({ error: 'METHOD_NOT_ALLOWED' }, 405);
       const origin = request.headers.get('origin');
       if (request.headers.get('x-subscriptions-lite') !== '1'
