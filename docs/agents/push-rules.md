@@ -34,4 +34,7 @@ test/speed.test.js apiKey: 'SYNTHETIC'
 test/remote-models.test.js ^[[:space:]]*return \{ source: 'OAuth', auth: provider === 'kimi-coding' \? \{ headers: \{ Authorization: `Bearer \$\{credential\?[.]access\}` \} \} : \{ apiKey: credential\?[.]access \} \};$
 test/catalog-runtime.test.js ^[[:space:]]*base_url: 'https://untrusted[.]invalid', api_key: 'REMOTE-PAID', headers: \{ authorization: 'Bearer REMOTE-PAID' \} \},$
 test/catalog-runtime.test.js ^[[:space:]]*return \{ access_token: accessFor\(id, '-ROTATED'\), refresh_token: `SYNTHETIC-ROTATED-REFRESH-\$\{id\}`, expires_in: 3600 \};$
+# 已核实的额度与目录轮换测试：仅这两行的内存变量引用和模拟响应。
+test/sidebar-refresh.test.js ^[[:space:]]*getAuth: async \(\) => \(\{ source: 'OAuth', auth: \{ apiKey: records[.]get\(keyFor\(id\)\)[?][.]payload[?][.]access \} \}\),$
+test/catalog-runtime.test.js ^[[:space:]]*[.]reply\(200, \{ access_token: rotated, refresh_token: 'SYNTHETIC-ROTATED-REFRESH-kimi-coding', expires_in: 3600 \},$
 ```
