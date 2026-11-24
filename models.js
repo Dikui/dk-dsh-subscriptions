@@ -49,6 +49,15 @@ function createAccountMetadata({ readIdentity, resolveIdentity = readIdentity, l
     state = { source: 'account', scope, state: 'unloaded', error: null, updatedAt: null };
     if (changed) onChange();
   }
+  // Drop a previous grant's descriptors from every SDK path without cancelling the
+  // shared OAuth refresh that may be in the middle of adopting the new grant.
+  function hideReplacedDisplay(identity) {
+    if (!retainValueOnRefresh || modelsIdentity === undefined || modelsIdentity === identity) return;
+    models = empty;
+    modelsIdentity = undefined;
+    state = { source: 'account', scope, state: 'loading', error: null, updatedAt: null };
+    onChange();
+  }
   function clear() { reset(); }
   async function ensure({ force = false, signal } = {}) {
     signal?.throwIfAborted();
@@ -111,6 +120,7 @@ function createAccountMetadata({ readIdentity, resolveIdentity = readIdentity, l
       initial = resolved;
       owner = resolved;
       current.resolving = false;
+      hideReplacedDisplay(resolved);
       const next = validate(await waitFor(loadValue({ identity: initial, signal: requestSignal }), requestSignal));
       const latest = await waitFor(readIdentity(requestSignal), requestSignal);
       if (generation !== current.generation || latest !== initial) fail(code('CHANGED'));
@@ -140,7 +150,7 @@ function createAccountMetadata({ readIdentity, resolveIdentity = readIdentity, l
   // waits for that refresh and never authorizes anything (ensure/prepareCall/stream do).
   async function observe({ signal } = {}) {
     signal?.throwIfAborted();
-    const readingGeneration = identityGeneration, readingCatalogGeneration = generation;
+    const readingGeneration = identityGeneration, readingCatalogGeneration = generation, priorDisplay = modelsIdentity;
     const identitySignal = AbortSignal.any([identityController.signal, AbortSignal.timeout(10000)]);
     let identity, failure;
     try { identity = await waitFor(waitFor(Promise.resolve().then(() => readIdentity(identitySignal)), identitySignal), signal); }
@@ -153,6 +163,11 @@ function createAccountMetadata({ readIdentity, resolveIdentity = readIdentity, l
     }
     signal?.throwIfAborted();
     if (readingGeneration !== identityGeneration || readingCatalogGeneration !== generation) {
+      return { ...snapshot(), models: empty, current: false };
+    }
+    // A slow local read (including a failure or logout) cannot invalidate a
+    // different collection installed while it was pending.
+    if (modelsIdentity !== priorDisplay && identity !== modelsIdentity) {
       return { ...snapshot(), models: empty, current: false };
     }
     if (failure) {
@@ -169,10 +184,11 @@ function createAccountMetadata({ readIdentity, resolveIdentity = readIdentity, l
     // result the official resolver may already have persisted), just hide the previous grant's
     // list until the flight installs the rotated grant's own collection.
     if (!flight && owner !== undefined && owner !== identity) reset(true);
+    else if (flight) hideReplacedDisplay(identity);
     const current = modelsIdentity !== undefined && modelsIdentity === identity;
     if (!flight) {
       const stale = !checkedAt || Date.now() - checkedAt >= 60000;
-      if (current ? stale : state.state === 'unloaded') void ensure().catch(() => {});
+      if (state.state === 'unloaded' || stale) void ensure().catch(() => {});
     }
     return { ...snapshot(), models: current ? models : empty, current };
   }

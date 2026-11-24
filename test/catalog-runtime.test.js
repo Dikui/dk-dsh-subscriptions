@@ -452,6 +452,8 @@ test('registered subscription routes use the same remote catalogs and native OAu
       await closing.unload();
       agent.clearCallHistory();
       assert.deepEqual(await closing.adapter.listModels(route), []);
+      await assert.rejects(closing.adapter.resolveModel(route, 'k3.1-pro'));
+      await new Promise(resolve => setImmediate(resolve));
       assert.deepEqual(calls(), [], 'a display read after unload must not issue a request');
       // The adapter never falls back to an unregistered route's native static directory.
       assert.deepEqual(await closing.adapter.listModels('openai'), []);

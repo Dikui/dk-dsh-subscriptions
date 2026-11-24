@@ -264,6 +264,7 @@ test('a rotation persisted before its resolver returns is adopted without cleari
     view = await catalog.observe();
     assert.equal(view.current, false);
     assert.deepEqual(view.models, [], 'the previous grant stayed visible for the rotated grant');
+    assert.deepEqual(catalog.getModels(), [], 'SDK descriptor lookup must not see a grant that display has invalidated');
     assert.equal(resolves, 2, 'a display read must not restart the in-flight rotation');
   } finally {
     resolverGate.resolve();
@@ -276,6 +277,26 @@ test('a rotation persisted before its resolver returns is adopted without cleari
   assert.equal(settled.current, true);
   assert.deepEqual(settled.models.map(model => model.id), ['b-model']);
   assert.equal(loads, 2, 'a fresh display must not load again');
+});
+
+test('picker-only reads recover after a transient catalog error passes its cache TTL', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: 100000 });
+  const recovered = Promise.withResolvers();
+  let loads = 0;
+  const catalog = createAccountModels({ readIdentity: async () => 'account', loadModels: async () => {
+    if (++loads === 1) throw new Error('offline');
+    return [{ id: 'restored', name: 'Restored' }];
+  }, onChange: () => { if (loads === 2) recovered.resolve(); } });
+  await assert.rejects(catalog.ensure(), { code: 'MODEL_CATALOG_FAILED' });
+  assert.equal((await catalog.observe()).state, 'error');
+  assert.equal(loads, 1);
+  t.mock.timers.tick(60001);
+  const retry = await catalog.observe();
+  assert.deepEqual(retry.models, []);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(loads, 2, 'a failed first load must not require opening Settings to recover');
+  await recovered.promise;
+  assert.equal((await catalog.observe()).models[0].id, 'restored');
 });
 
 test('quota keeps its loading refresh semantics while model displays are retained', async () => {

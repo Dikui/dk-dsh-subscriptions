@@ -154,6 +154,8 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false, 
         inputModalities: [...(model.input ?? [])] }));
     }
     async resolveModel(provider, model, signal) {
+      signal = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal;
+      signal.throwIfAborted();
       const models = modelsForRoute(provider);
       // A supported route without a configured model source must not resolve the SDK's
       // static directory; unknown routes keep the native adapter's own answer.
