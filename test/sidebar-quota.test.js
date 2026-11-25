@@ -81,6 +81,12 @@ test('hovering the gauge lists every connected account with remaining quota and 
     assert.ok(text.includes('OpenAI · ChatGPT') && text.includes('Kimi Code'), text);
     assert.ok(text.includes('5-hour limit'), text);
     assert.ok(text.includes('40% remaining') && text.includes('90% remaining'), text);
+    const bars = panel.nodes(open).filter(node => node.props?.className === 'sl-quota-bar');
+    assert.equal(bars.length, 3, 'one bar per quota window');
+    assert.deepEqual(bars.map(bar => bar.props.role), ['progressbar', 'progressbar', 'progressbar']);
+    assert.deepEqual(bars.map(bar => bar.props['aria-valuenow']), [75, 40, 90]);
+    const fills = bars.map(bar => panel.nodes(bar).find(node => node.props?.className === 'sl-quota-bar-fill'));
+    assert.deepEqual(fills.map(fill => fill.props.style.width), ['75%', '40%', '90%'], 'fill width follows remaining quota');
     assert.ok(text.includes('Resets:'), text);
     assert.ok(text.includes('11/11/2026'), text);
     open.props.onMouseEnter();

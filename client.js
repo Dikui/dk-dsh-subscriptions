@@ -271,11 +271,19 @@ window.__ModuleLoader__.load({
         quota.state === 'partial' && h('p', { className: 'sl-status', role: 'status' }, t('quotaPartial')),
         quota.windows.map(window => {
           const label = t(quotaNames[window.id] ?? 'quotaWindow');
-          const remaining = window.usedPercent === null ? t('unknown') : `${Math.round((100 - window.usedPercent) * 10) / 10}%`;
+          const remaining = window.usedPercent === null ? null : Math.min(100, Math.max(0, Math.round((100 - window.usedPercent) * 10) / 10));
+          const remainingText = remaining === null ? t('unknown') : `${remaining}%`;
           const period = quotaFixedPeriods.includes(window.id) ? '' : quotaPeriod(chinese, window.windowSeconds);
           return h('div', { key: window.id, className: 'sl-quota-row' },
-            h('span', null, `${label}${period ? ` · ${period}` : ''} · ${chinese ? `${t('quotaRemaining')} ${remaining}` : `${remaining} ${t('quotaRemaining')}`}`),
-            window.usedPercent !== null && h('progress', { max: 100, value: 100 - window.usedPercent, 'aria-label': `${label} · ${t('quotaRemaining')}` }),
+            h('span', null, `${label}${period ? ` · ${period}` : ''} · ${chinese ? `${t('quotaRemaining')} ${remainingText}` : `${remainingText} ${t('quotaRemaining')}`}`),
+            remaining !== null && h('div', {
+              className: 'sl-quota-bar',
+              role: 'progressbar',
+              'aria-label': `${label} · ${t('quotaRemaining')}`,
+              'aria-valuemin': 0,
+              'aria-valuemax': 100,
+              'aria-valuenow': remaining,
+            }, h('span', { className: 'sl-quota-bar-fill', style: { width: `${remaining}%` } })),
             h('span', { className: 'sl-status' }, `${t('quotaResets')}: ${quotaDate(chinese, window.resetsAt)}`));
         }),
         quota.updatedAt != null && h('p', { className: 'sl-status', role: 'status' },
@@ -291,7 +299,9 @@ window.__ModuleLoader__.load({
       @media(hover:hover){.slq-trigger:hover{background:var(--dsw-alias-interactive-bg-hover)}}
       .slq-panel{position:fixed;z-index:1100;box-sizing:border-box;display:grid;gap:8px;max-height:min(480px,calc(100vh - 72px));overflow-y:auto;padding:12px;border:.5px solid var(--dsw-alias-border-l1);border-radius:var(--dsw-radius-lg,12px);background:var(--dsw-specific-menu,var(--dsw-alias-bg-layer-1));box-shadow:var(--dsw-elevation-prominent,0 8px 24px #0003);color:var(--dsw-alias-label-secondary);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
       .slq-head{display:flex;align-items:center;gap:8px}.slq-head strong{color:var(--dsw-alias-label-primary);font-size:13px}
-      .slq-panel .sl-quota-row{display:grid;gap:3px}.slq-panel progress{width:100%;height:4px;accent-color:var(--dsw-alias-brand-primary)}
+      .slq-panel .sl-quota-row{display:grid;gap:3px}
+      .slq-panel .sl-quota-bar{box-sizing:border-box;width:100%;height:5px;border-radius:999px;overflow:hidden;background:var(--dsw-alias-border-l2,rgba(127,127,127,.28))}
+      .slq-panel .sl-quota-bar-fill{display:block;height:100%;border-radius:inherit;background:var(--dsw-alias-state-business-primary,#7aaaff)}
       .slq-panel .sl-status{font-size:11px;color:var(--dsw-alias-label-caption)}.slq-panel .sl-error{color:var(--dsw-alias-state-error-primary)}
       .slq-panel button{font:inherit;color:inherit;background:transparent;border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:4px 8px;cursor:pointer}
       .slq-panel button:disabled{opacity:.5;cursor:not-allowed}
