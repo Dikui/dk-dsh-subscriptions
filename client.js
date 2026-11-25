@@ -466,11 +466,11 @@ window.__ModuleLoader__.load({
           const provider = current?.provider, model = current?.model;
           // The host resolves model-declared and request-level capabilities.
           // The client only scopes this plugin to subscription routes.
-          const supported = typeof provider === 'string' && provider.startsWith('subscription-') && typeof model === 'string';
+          const supported = state.routable !== false && typeof provider === 'string' && provider.startsWith('subscription-') && typeof model === 'string';
           const [speed, setSpeed] = React.useState(null);
           const [error, setError] = React.useState(null);
           const [busy, setBusy] = React.useState(false);
-          const generation = React.useRef(0), active = React.useRef(null);
+          const generation = React.useRef(0), active = React.useRef(null), saving = React.useRef(false);
           const id = React.useId();
           async function send(action, extra, signal) {
             const response = await fetch('/api/subscriptions-lite/speed', { method: 'POST', credentials: 'same-origin', cache: 'no-store', signal,
@@ -480,6 +480,7 @@ window.__ModuleLoader__.load({
             const data = await response.json();
             if (!response.ok || data?.error) throw new Error(data?.error ?? 'REQUEST_FAILED');
             if (data.sessionId !== sessionId || data.provider !== provider || data.model !== model || typeof data.selected !== 'string'
+              || typeof data.viewScope !== 'string' || !data.viewScope || data.viewScope.length > 128
               || !Array.isArray(data.tiers) || !data.tiers.length || data.tiers.length > 33
               || !data.tiers.every(tier => typeof tier?.id === 'string' && typeof tier.name === 'string')
               || !data.tiers.some(tier => tier.id === data.selected)) throw new Error('BAD_RESPONSE');
@@ -497,22 +498,30 @@ window.__ModuleLoader__.load({
           React.useEffect(() => { load(); }, [load]);
           React.useEffect(() => {
             setSpeed(null); setError(null); setBusy(false);
-            if (supported) refresh();
-            return () => { generation.current++; active.current?.abort(); };
-          }, [sessionId, provider, model, state.groups]);
-          const currentSpeed = speed && speed.provider === provider && speed.model === model ? speed : null;
+            return () => { generation.current++; saving.current = false; active.current?.abort(); };
+          }, [sessionId, provider, model, supported]);
+          React.useEffect(() => {
+            // Directory revisions update offers, not the identity of the control.
+            // A save reconciles intervening revisions after its own reply.
+            if (supported && !saving.current) refresh();
+          }, [sessionId, provider, model, supported, state.groups]);
+          const currentSpeed = speed && speed.sessionId === sessionId && speed.provider === provider && speed.model === model ? speed : null;
           if (!supported) return null;
           const label = tier => tier.id === 'default' && tier.name === 'Normal' ? t('speedNormal') : tier.name;
           async function choose(tier) {
-            if (busy || (tier === currentSpeed.selected && !currentSpeed.stale)) return;
+            if (busy || saving.current || (tier === currentSpeed.selected && !currentSpeed.stale)) return;
+            saving.current = true;
             const version = ++generation.current;
             active.current?.abort(); const controller = new AbortController(); active.current = controller;
             setBusy(true); setError(null);
             setSpeed({ ...currentSpeed, selected: tier });
-            try { const data = await send('speed-select', { tier, confirmed: tier !== 'default' }, controller.signal);
-              if (generation.current === version) setSpeed(data);
+            try { const data = await send('speed-select', { tier, confirmed: tier !== 'default', viewScope: currentSpeed.viewScope }, controller.signal);
+              if (generation.current === version) {
+                if (directory.getSnapshot().groups !== state.groups) { saving.current = false; await refresh(); }
+                else setSpeed(data);
+              }
             } catch (error) { if (!controller.signal.aborted && generation.current === version) setError(error.message); }
-            finally { if (generation.current === version) setBusy(false); }
+            finally { if (generation.current === version) { saving.current = false; setBusy(false); } }
           }
           return h('div', { className: 'sl-speed' },
             h('style', null, `

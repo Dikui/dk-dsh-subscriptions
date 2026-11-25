@@ -1,11 +1,11 @@
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createRequire } from 'node:module';
-import { createHttpHandler, fail } from './core.js';
+import { createHttpHandler, fail, PROVIDERS } from './core.js';
 import { createSpeedSelections } from './speed.js';
 
 // Use the host's existing storage/validation packages, not a second installation.
-export async function createSpeedHost(ctx, { adapterUrl, modelFor, isConversation }) {
+export async function createSpeedHost(ctx, { adapterUrl, modelFor, displayModelFor, isConversation }) {
   const require = createRequire(adapterUrl);
   const { defineDomain, domainTable } = await import(require.resolve('@deepseek-ai/dsh-storage-domain'));
   const { z } = await import(require.resolve('zod'));
@@ -19,14 +19,18 @@ export async function createSpeedHost(ctx, { adapterUrl, modelFor, isConversatio
   // Remembered tier lives in the same table under a reserved id, so the domain
   // schema stays v1 and per-session records keep their exact shape.
   const lastId = provider => `dk-dsh-subscriptions:speed-last:${provider}`;
+  // Process-local, tuple-specific view token; never expose the durable consent key.
+  const viewKey = randomBytes(32);
   const selections = createSpeedSelections({
+    viewScope: ({ sessionId, provider, model }, account) => createHmac('sha256', viewKey)
+      .update(JSON.stringify([sessionId, provider, model, account])).digest('base64url'),
     read(id) { const value = table.get(key(id)); return value?.sessionId === id ? value : undefined; },
     write: (id, value) => table.put(key(id), { sessionId: id, ...value }),
     readLast(provider) { return table.get(key(lastId(provider)))?.choices?.[0]; },
     writeLast: (provider, value) => table.put(key(lastId(provider)), {
       sessionId: lastId(provider), choices: [{ provider, ...value }],
     }),
-    sessionExists: id => !!ctx.agents.get(id), modelFor,
+    sessionExists: id => !!ctx.agents.get(id), modelFor, displayModelFor,
     validateSelection: input => route(input),
   });
   const requestContext = new AsyncLocalStorage();
@@ -43,7 +47,10 @@ export async function createSpeedHost(ctx, { adapterUrl, modelFor, isConversatio
   });
   ctx.on('agent/pre-step', async ({ agent, modelSelection, signal }, next) => {
     const decision = await next();
-    if (decision.kind !== 'reject' && !signal.aborted) await selections.beginStep(agent.session.id, modelSelection, signal);
+    if (decision.kind !== 'reject' && !signal.aborted) {
+      if (PROVIDERS.some(provider => provider.route === modelSelection.provider)) await selections.beginStep(agent.session.id, modelSelection, signal);
+      else selections.endSession(agent.session.id);
+    }
     return decision;
   });
   ctx.on('agent/disposed', ({ agent }) => selections.endSession(agent.session.id));

@@ -71,7 +71,7 @@ function canonicalTier(speed, value) {
 // readLast/writeLast remember the latest choice for the model it was made on, so
 // new sessions inherit it while switching models returns to Normal.
 export function createSpeedSelections({ read, write, readLast = () => undefined, writeLast = async () => {},
-  modelFor, sessionExists, validateSelection = () => {} }) {
+  modelFor, displayModelFor = modelFor, viewScope, sessionExists, validateSelection = () => {} }) {
   const pending = new Map(), steps = new Map();
   const key = (provider, model) => JSON.stringify([provider, model]);
   function check({ sessionId, provider, model }) {
@@ -94,31 +94,39 @@ export function createSpeedSelections({ read, write, readLast = () => undefined,
     // A remembered tier only applies while the current model still offers it.
     return last ? canonicalTier(speed, last.tier) ?? 'default' : 'default';
   }
-  async function state(input, signal) {
+  async function display(input, signal) {
     check(input);
-    const model = await modelFor(input.provider, input.model, signal);
+    const model = await displayModelFor(input.provider, input.model, signal);
     if (!model) fail('UNKNOWN_MODEL');
+    return model;
+  }
+  function stateOf(input, model) {
     const speed = modelSpeed(model), wanted = speed.tiers.length > 1 ? selected(input, model, speed) : 'default';
     const tier = canonicalTier(speed, wanted);
     return { sessionId: input.sessionId, provider: input.provider, model: input.model,
-      source: speed.source, tiers: speed.tiers, selected: tier ?? 'default', stale: tier === undefined };
+      source: speed.source, tiers: speed.tiers, selected: tier ?? 'default', stale: tier === undefined,
+      ...(viewScope ? { viewScope: viewScope(input, model.speedAccount) } : {}) };
   }
+  async function state(input, signal) { return stateOf(input, await display(input, signal)); }
   async function select(input, signal) {
-    const current = await state({ sessionId: input.sessionId, provider: input.provider, model: input.model }, signal);
-    const tier = canonicalTier(current, input.tier);
-    if (tier === undefined) fail('UNSUPPORTED_SPEED');
-    if (tier !== 'default' && input.confirmed !== true) fail('SPEED_CONFIRMATION_REQUIRED');
-    const previous = pending.get(input.sessionId) ?? Promise.resolve();
-    const operation = previous.catch(() => {}).then(async () => {
+    check(input);
+    // Reserve the click's queue position synchronously, even if its identity read
+    // is slow or fails. Later saves cannot overtake a pending write.
+    const previous = pending.get(input.sessionId);
+    const operation = Promise.allSettled([previous, display(input, signal)]).then(async ([, observed]) => {
       signal?.throwIfAborted();
-      check(input);
-      const choices = (read(input.sessionId)?.choices ?? []).filter(choice => key(choice.provider, choice.model) !== key(input.provider, input.model));
-      let account;
-      if (tier !== 'default') {
-        const descriptor = await modelFor(input.provider, input.model, signal);
-        if (canonicalTier(modelSpeed(descriptor), input.tier) !== tier) fail('UNSUPPORTED_SPEED');
-        account = descriptor.speedAccount;
+      if (observed.status === 'rejected') throw observed.reason;
+      const model = observed.value, account = model.speedAccount;
+      if (viewScope && input.viewScope !== viewScope(input, account)) fail('SPEED_MODEL_CHANGED');
+      const tier = canonicalTier(modelSpeed(model), input.tier);
+      if (tier === undefined) fail('UNSUPPORTED_SPEED');
+      if (tier !== 'default' && input.confirmed !== true) fail('SPEED_CONFIRMATION_REQUIRED');
+      if (previous) {
+        const latest = await display(input, signal);
+        if (latest.speedAccount !== account) fail('SPEED_MODEL_CHANGED');
+        if (canonicalTier(modelSpeed(latest), input.tier) !== tier) fail('UNSUPPORTED_SPEED');
       }
+      const choices = (read(input.sessionId)?.choices ?? []).filter(choice => key(choice.provider, choice.model) !== key(input.provider, input.model));
       // An explicit Normal is stored too, so it overrides the remembered tier.
       choices.push({ provider: input.provider, model: input.model, tier, ...(account ? { account } : {}) });
       if (choices.length > 1000) fail('SPEED_SELECTION_LIMIT');
@@ -129,7 +137,7 @@ export function createSpeedSelections({ read, write, readLast = () => undefined,
     });
     pending.set(input.sessionId, operation);
     try { await operation; } finally { if (pending.get(input.sessionId) === operation) pending.delete(input.sessionId); }
-    return state(current, signal);
+    return state(input, signal);
   }
   return {
     state, select,
@@ -143,15 +151,13 @@ export function createSpeedSelections({ read, write, readLast = () => undefined,
       const step = choice ? { ...input, ...choice }
         : { ...input, remembered: true, tier: last?.tier ?? 'default', ...(last?.account ? { account: last.account } : {}) };
       steps.set(sessionId, step);
-      if (step.tier !== 'default' && !step.remembered) {
-        const descriptor = await modelFor(input.provider, input.model, signal);
-        if (!descriptor) fail('UNKNOWN_MODEL');
-        const speed = modelSpeed(descriptor);
-        const tier = step.account === descriptor.speedAccount && speed.tiers.length > 1 ? canonicalTier(speed, step.tier) : 'default';
-        if (tier === undefined) fail('UNSUPPORTED_SPEED');
-        signal?.throwIfAborted();
-        if (steps.get(sessionId) === step) step.tier = tier;
-      }
+      const descriptor = await modelFor(input.provider, input.model, signal);
+      if (!descriptor) fail('UNKNOWN_MODEL');
+      const speed = modelSpeed(descriptor);
+      const tier = step.account === descriptor.speedAccount && speed.tiers.length > 1 ? canonicalTier(speed, step.tier) : 'default';
+      if (tier === undefined && !step.remembered) fail('UNSUPPORTED_SPEED');
+      signal?.throwIfAborted();
+      if (steps.get(sessionId) === step) step.tier = tier ?? 'default';
     },
     endSession(sessionId) { steps.delete(sessionId); },
     capture(options, model) {
@@ -165,8 +171,7 @@ export function createSpeedSelections({ read, write, readLast = () => undefined,
         : step.account === model.speedAccount ? step.tier ?? 'default' : 'default';
       // A step already owns a canonical id; aliases may only resolve unsnapshotted choices.
       const canonical = !matches ? canonicalTier(speed, tier)
-        : step.remembered ? canonicalTier(speed, tier) ?? 'default'
-        : speed.tiers.find(choice => choice.id === tier)?.id;
+        : speed.tiers.find(choice => choice.id === tier)?.id ?? (step.remembered ? 'default' : undefined);
       if (canonical === undefined) fail('UNSUPPORTED_SPEED');
       // Both capability adapters describe request tiers, never replacement models.
       return canonical;
@@ -176,13 +181,14 @@ export function createSpeedSelections({ read, write, readLast = () => undefined,
 
 // onPayload survives pi-ai streamSimple; serviceTier alone is dropped by 1.3.0.
 // The callback is request-local and preserves any pre-existing payload hook.
-export function withSpeedPayload(options, tier) {
+export function withSpeedPayload(options, tier, authorize) {
   if (tier === undefined) return options;
   return { ...options, onPayload: async (payload, model) => {
     const next = await options?.onPayload?.(payload, model) ?? payload;
     // Codex treats explicit `default` as a client sentinel: standard requests
     // omit the wire field (official openai_models.rs/config_types.rs contract).
     if (tier === 'default') { const { service_tier, ...standard } = next; return standard; }
+    await authorize(); // Positive consent must still match the finalized OAuth request and live catalog.
     return { ...next, service_tier: tier };
   } };
 }

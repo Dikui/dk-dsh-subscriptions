@@ -220,11 +220,37 @@ test('models without Speed capability always use default even with a previously 
   }
 });
 
+test('a slow first identity read cannot undo a later Normal click', async () => {
+  const model = await discover({ service_tiers: [{ id: 'priority', name: 'Fast' }] });
+  const firstRead = Promise.withResolvers(); let lookups = 0, saved;
+  const speeds = createSpeedSelections({ read: () => saved, write: async (_, value) => { saved = value; },
+    modelFor: async () => { if (++lookups === 1) await firstRead.promise; return model; }, sessionExists: () => true });
+  const input = { sessionId: 'session-a', provider: model.provider, model: model.id };
+  const fast = speeds.select({ ...input, tier: 'priority', confirmed: true });
+  const normal = speeds.select({ ...input, tier: 'default' });
+  await new Promise(resolve => setImmediate(resolve)); firstRead.resolve(); await Promise.all([fast, normal]);
+  assert.equal((await speeds.state(input)).selected, 'default');
+});
+
+test('a queued click cannot be rebound to a replacement account at write time', async () => {
+  let model = await discover({ service_tiers: [{ id: 'priority', name: 'Fast' }] });
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), written = [];
+  const speeds = createSpeedSelections({ read: () => undefined, sessionExists: () => true, modelFor: async () => model,
+    write: async (_, value) => { written.push(value); entered.resolve(); await release.promise; } });
+  const input = { sessionId: 'session-a', provider: model.provider, model: model.id };
+  const first = speeds.select({ ...input, tier: 'default' }); await entered.promise;
+  const queued = assert.rejects(speeds.select({ ...input, tier: 'priority', confirmed: true }), { code: 'SPEED_MODEL_CHANGED' });
+  await new Promise(resolve => setImmediate(resolve));
+  model = { ...model, speedAccount: 'synthetic-replacement' };
+  release.resolve(); await first; await queued;
+  assert.equal(written.length, 1);
+});
+
 test('a model switch during metadata lookup rejects the obsolete speed save', async () => {
   const model = await discover({ service_tiers: [{ id: 'priority', name: 'Fast' }] });
-  let changed = false, written = false, lookups = 0;
+  let changed = false, written = false;
   const speeds = createSpeedSelections({ read: () => undefined, write: async () => { written = true; },
-    modelFor: async () => { if (++lookups === 2) changed = true; return model; }, sessionExists: () => true,
+    modelFor: async () => { changed = true; return model; }, sessionExists: () => true,
     validateSelection: () => { if (changed) throw new Error('SPEED_MODEL_CHANGED'); } });
   await assert.rejects(speeds.select({ sessionId: 'session-a', provider: 'subscription-openai-codex', model: model.id,
     tier: 'priority', confirmed: true }), /SPEED_MODEL_CHANGED/);

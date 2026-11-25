@@ -16,7 +16,7 @@ try {
 // MockAgent forbids external requests; synthetic OAuth and memory domain replace user storage.
 test('session Speed survives native streamSimple conversion into the actual Codex HTTP body', {
   skip: !undici || !module.registerHooks ? 'Set DSH_TEST_UNDICI and use the desktop Node runtime.' : false,
-}, async () => {
+}, async t => {
   const previous = undici.getGlobalDispatcher(), env = process.env.HTTPS_PROXY;
   process.env.HTTPS_PROXY = 'http://synthetic-proxy.invalid:80';
   const mock = new undici.MockAgent(); mock.disableNetConnect(); undici.setGlobalDispatcher(mock);
@@ -41,11 +41,14 @@ test('session Speed survives native streamSimple conversion into the actual Code
     on(name, listener) { listeners.set(name, listener); },
     connection: { fetch: { register: value => routes.set(value.path, value.fetch) } },
   };
-  async function request(action, sessionId, tier, confirmed) {
-    return routes.get('/api/subscriptions-lite/speed')(new Request('http://dsh.internal/api/subscriptions-lite/speed', {
+  const views = new Map();
+  async function request(action, sessionId, tier, confirmed, viewScope = views.get(sessionId)) {
+    const result = await routes.get('/api/subscriptions-lite/speed')(new Request('http://dsh.internal/api/subscriptions-lite/speed', {
       method: 'POST', headers: { 'content-type': 'application/json', 'x-subscriptions-lite': '1' },
-      body: JSON.stringify({ action, sessionId, ...selected.get(sessionId), ...(tier === undefined ? {} : { tier, confirmed }) }),
+      body: JSON.stringify({ action, sessionId, ...selected.get(sessionId), ...(tier === undefined ? {} : { tier, confirmed, viewScope }) }),
     }));
+    if (result.ok) views.set(sessionId, (await result.clone().json()).viewScope);
+    return result;
   }
   async function boundary(id) {
     await listeners.get('agent/pre-step')({ agent: { session: { id } }, modelSelection: selected.get(id), signal: new AbortController().signal },
@@ -68,11 +71,13 @@ test('session Speed survives native streamSimple conversion into the actual Code
     const { markAgentLoopRequest } = await import(pathToFileURL(hostRequire.resolve('@deepseek-ai/dsh-llm')).href);
     const { apply } = await import('../index.js');
     records.set(native.recordKeyFor('openai-codex'), { kind: 'grant', payload: { type: 'oauth', access: token, refresh: 'SYNTHETIC-REFRESH', accountId, expires: Date.now() + 3600000 } });
-    mock.get('https://chatgpt.com').intercept({ method: 'GET', path: /^\/backend-api\/codex\/models\?/ }).reply(200, { models: [{
+    const catalogRoute = { method: 'GET', path: /^\/backend-api\/codex\/models\?/ };
+    const catalog = { models: [{
       slug: model, display_name: 'Tiered Model', visibility: 'list', supported_in_api: true,
       service_tiers: [{ id: 'priority', name: 'Fast' }, { id: 'ultrafast', name: 'Ultrafast' }],
       supported_reasoning_levels: [{ effort: 'high' }], context_window: 100000,
-    }] });
+    }] };
+    mock.get('https://chatgpt.com').intercept(catalogRoute).reply(200, catalog);
     await apply({ ...scope,
       inject(names, callback) { assert.deepEqual(names, ['agents', 'storageDomain']); injections.push(callback(scope)); },
       credentials: { readRecord: async key => records.get(key), async modifyRecord(key, change) { const value = await change(records.get(key)); if (value !== undefined) records.set(key, value); return records.get(key); } },
@@ -87,9 +92,33 @@ test('session Speed survives native streamSimple conversion into the actual Code
     assert.deepEqual(codexState.tiers.map(tier => tier.id), ['default', 'priority', 'ultrafast']);
     assert.equal((await request('speed-select', 'session-a', 'priority', false)).status, 400);
     assert.equal((await request('speed-select', 'session-a', 'flex', true)).status, 400);
-    assert.equal((await request('speed-select', 'session-a', 'fast', true)).status, 200);
+    // The warm picker and explicit Fast save are local, even when the TTL refresh hangs.
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+    t.mock.timers.tick(60001);
+    const release = Promise.withResolvers(), started = Promise.withResolvers();
+    mock.get('https://chatgpt.com').intercept(catalogRoute).reply(200, async () => {
+      started.resolve(); await release.promise; return catalog;
+    });
+    const local = async (work, label) => {
+      const timeout = AbortSignal.timeout(1000);
+      const result = await Promise.race([work, new Promise(resolve => timeout.addEventListener('abort', () => resolve(null)))]);
+      assert.ok(result, `${label} waited for upstream`); return result;
+    };
+    try {
+      assert.equal((await local(request('speed-state', 'session-a'), 'warm state')).status, 200);
+      await local(started.promise.then(() => true), 'background refresh');
+      assert.equal((await local(request('speed-select', 'session-a', 'fast', true), 'explicit Fast')).status, 200);
+      let entered = false, inherited = false, prepared = false;
+      const step = boundary('session-a').then(() => { entered = true; });
+      const otherStep = boundary('session-b').then(() => { inherited = true; });
+      const prepare = adapter.prepareCall(provider, model).then(() => { prepared = true; });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.deepEqual([entered, inherited, prepared], [false, false, false], 'both explicit and inherited Speed join strict validation');
+      release.resolve(); await Promise.all([step, otherStep, prepare]);
+    } finally { release.resolve(); }
     // New sessions inherit the model's last tier, so make session-b explicitly
     // Normal before checking that Normal omits the nonstandard Codex field.
+    await request('speed-state', 'session-b');
     assert.equal((await request('speed-select', 'session-b', 'default', true)).status, 200);
     await boundary('session-a'); await boundary('session-b');
     mock.get('https://chatgpt.com').intercept({ method: 'POST', path: '/backend-api/codex/responses' }).reply(200, async ({ body, headers }) => {
@@ -97,11 +126,11 @@ test('session Speed survives native streamSimple conversion into the actual Code
       const decoded = new Headers(headers).get('content-encoding') === 'zstd' ? zstdDecompressSync(bytes) : bytes;
       captured.push(JSON.parse(decoded.toString('utf8'))); return response('ok');
     }, { headers: { 'content-type': 'text/event-stream' } }).times(4);
-    async function stream(sessionId, marked = true) {
+    async function stream(sessionId, prepared = null) {
       const options = { provider, model, sessionId, maxTokens: 16, reasoningEffort: 'high',
         messages: [{ role: 'user', content: [{ type: 'text', text: 'Synthetic' }] }] };
-      if (marked) markAgentLoopRequest(options);
-      const prepared = await adapter.prepareCall(provider, model);
+      markAgentLoopRequest(options);
+      prepared ??= await adapter.prepareCall(provider, model);
       // The real runtime may clone after file/image/tool projection. The
       // llm/stream observer must retain provenance without mutating the envelope.
       const chunks = await Array.fromAsync(listeners.get('llm/stream')(options, () => prepared.stream({ ...options })));
@@ -117,6 +146,58 @@ test('session Speed survives native streamSimple conversion into the actual Code
     await boundary('session-a'); await stream('session-a');
     assert.equal(captured[3].service_tier, 'ultrafast');
     state = await request('speed-state', 'session-a'); assert.equal((await state.json()).selected, 'ultrafast');
+    // A prepared call keeps its reasoning/context, not authority for a removed tier.
+    const beforeRemoval = await adapter.prepareCall(provider, model);
+    t.mock.timers.tick(60001);
+    const revalidating = Promise.withResolvers(), removed = Promise.withResolvers();
+    mock.get('https://chatgpt.com').intercept(catalogRoute).reply(200, async () => {
+      revalidating.resolve(); await removed.promise;
+      return { models: [{ ...catalog.models[0], service_tiers: [{ id: 'priority', name: 'Fast' }] }] };
+    });
+    const obsolete = assert.rejects(stream('session-a', beforeRemoval), { code: 'UNSUPPORTED_SPEED' });
+    try {
+      await local(revalidating.promise.then(() => true), 'strict stream');
+      assert.equal(captured.length, 4);
+    } finally { removed.resolve(); }
+    await obsolete;
+    await assert.rejects(boundary('session-a'), { code: 'UNSUPPORTED_SPEED' });
+    state = await request('speed-state', 'session-a'); assert.equal((await state.json()).stale, true);
+    assert.equal((await request('speed-select', 'session-a', 'ultrafast', true)).status, 400);
+    // Account B has the same model and offers Fast. A click from A's open page is not B's consent.
+    const accountAView = views.get('session-a');
+    const key = native.recordKeyFor('openai-codex');
+    await request('speed-select', 'session-a', 'priority', true); await boundary('session-a');
+    const beforeSwitch = await adapter.prepareCall(provider, model);
+    // The native SDK resolves OAuth lazily, after the stream's initial catalog check.
+    const resolveKey = adapter.config.resolveApiKey;
+    const switchDuringAuth = t.mock.method(adapter.config, 'resolveApiKey', async (...args) => {
+      records.set(key, { kind: 'grant', payload: { ...records.get(key).payload, accountId: 'SYNTHETIC-B' } });
+      return resolveKey(...args);
+    });
+    mock.get('https://chatgpt.com').intercept(catalogRoute).reply(200, catalog);
+    try { await assert.rejects(stream('session-a', beforeSwitch), /SPEED_MODEL_CHANGED/); }
+    finally { switchDuringAuth.mock.restore(); }
+    assert.equal(captured.length, 4);
+    assert.equal((await request('speed-select', 'session-a', 'fast', true, accountAView)).status, 400);
+    const bView = await (await request('speed-state', 'session-a')).json();
+    assert.equal(bView.selected, 'default');
+    assert.notEqual(bView.viewScope, accountAView);
+    assert.equal((await request('speed-select', 'session-a', 'fast', true, null)).status, 400);
+    assert.equal(JSON.stringify(bView).includes('SYNTHETIC'), false);
+    assert.ok(!JSON.stringify(bView).includes([...stored.values()].find(value => value.sessionId === 'session-a').choices[0].account));
+    assert.equal((await request('speed-select', 'session-a', 'priority', true)).status, 200);
+    await boundary('session-a');
+    const beforeDenial = await adapter.prepareCall(provider, model);
+    t.mock.timers.tick(60001);
+    mock.get('https://chatgpt.com').intercept(catalogRoute).reply(403, {});
+    await assert.rejects(stream('session-a', beforeDenial), { code: 'MODEL_CATALOG_DENIED' });
+    for (const action of ['speed-state', 'speed-select']) {
+      const denied = await request(action, 'session-a', 'priority', true);
+      assert.equal(denied.ok, false); assert.equal((await denied.json()).error, 'MODEL_CATALOG_DENIED');
+    }
+    records.delete(key);
+    assert.equal((await (await request('speed-state', 'session-a')).json()).error, 'MISSING_CREDENTIAL');
+    assert.equal(captured.length, 4);
     const crossOrigin = await routes.get('/api/subscriptions-lite/speed')(new Request('http://dsh.internal/api/subscriptions-lite/speed', {
       method: 'POST', headers: { origin: 'https://evil.example', 'content-type': 'application/json', 'x-subscriptions-lite': '1' }, body: '{}',
     }));

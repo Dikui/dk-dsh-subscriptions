@@ -173,19 +173,29 @@ export function remoteSource({ endpoint, normalize, scope = 'account', headers =
     },
   });
 }
+// Bind consent to the credential that supplied these descriptors, not a later
+// credential read that may already belong to another account.
+export function speedAccountOf(credential) {
+  const identity = [credential?.accountId, credential?.subject, credential?.refresh, credential?.access]
+    .find(value => typeof value === 'string' && value.length);
+  return identity && createHash('sha256').update(`dk-dsh-subscriptions:speed:${identity}`).digest('hex');
+}
+function scopedCatalog(normalize) {
+  return async (payload, baseline, context) => {
+    const speedAccount = speedAccountOf(context.credential);
+    return (await normalize(payload, baseline, context)).map(model => ({ ...model, speedAccount }));
+  };
+}
 const openAICodexModels = remoteSource({
   endpoint: version => `https://chatgpt.com/backend-api/codex/models?client_version=${encodeURIComponent(version)}`,
   headers: credential => {
     if (typeof credential.accountId !== 'string' || !credential.accountId) fail('MODEL_CATALOG_DENIED');
     return { 'chatgpt-account-id': credential.accountId, originator: 'pi' };
   },
-  normalize: (payload, baseline, { credential }) => {
-    const speedAccount = createHash('sha256').update(`dk-dsh-subscriptions:speed:${credential.accountId}`).digest('hex');
-    return codexModels(payload, baseline).map(model => ({ ...model, speedAccount }));
-  },
+  normalize: scopedCatalog(codexModels),
 });
-const kimiCodingModels = remoteSource({ endpoint: () => 'https://api.kimi.com/coding/v1/models', normalize: kimiModels });
+const kimiCodingModels = remoteSource({ endpoint: () => 'https://api.kimi.com/coding/v1/models', normalize: scopedCatalog(kimiModels) });
 
 // Verified remote catalogs only; SDK lists supply transport templates, never names.
-const xaiModels = remoteSource({ endpoint: () => 'https://api.x.ai/v1/models', normalize: grokModels, scope: 'vendor' });
+const xaiModels = remoteSource({ endpoint: () => 'https://api.x.ai/v1/models', normalize: scopedCatalog(grokModels), scope: 'vendor' });
 export const accountModelSources = new Map([['openai-codex', openAICodexModels], ['kimi-coding', kimiCodingModels], ['xai', xaiModels]]);

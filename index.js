@@ -1,15 +1,14 @@
 import { createRequire, findPackageJSON } from 'node:module';
-import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { PiAiAdapter, recordKeyFor } from '@deepseek-ai/dsh-llm-pi-ai';
 import { createHttpHandler, createSubscriptions, fail, PROVIDERS, subscriptionBindings } from './core.js';
 import { createAutoProxy } from './network.js';
 import { createAccountModels, createAccountQuota } from './models.js';
 import { accountQuotaSources, opencodeGoQuotaSource } from './quota-sources.js';
-import { accountModelSources } from './model-sources.js';
+import { accountModelSources, speedAccountOf } from './model-sources.js';
 import { registerVendorSkills } from './vendor-skills.js';
 import { createSpeedHost } from './speed-host.js';
-import { withSpeedPayload } from './speed.js';
+import { modelSpeed, withSpeedPayload } from './speed.js';
 import packageInfo from './package.json' with { type: 'json' };
 
 export const name = 'dk-dsh-subscriptions';
@@ -95,13 +94,6 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false, 
     if (!models) fail('MODEL_CATALOG_UNAVAILABLE');
     await models.ensure({ signal: signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal });
   }
-  async function scopedSpeedModel(provider, descriptor) {
-    const credential = await bindings.auth.credentials.read(provider);
-    if (!credential) fail('MISSING_CREDENTIAL');
-    const identity = credential.accountId ?? credential.subject ?? credential.refresh ?? credential.access;
-    const speedAccount = createHash('sha256').update(`dk-dsh-subscriptions:speed:${identity}`).digest('hex');
-    return { ...descriptor, speedAccount };
-  }
   class SubscriptionAdapter extends PiAiAdapter {
     modelInfo(snapshot, provider, model) {
       const info = super.modelInfo(snapshot, provider, model);
@@ -115,19 +107,29 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false, 
       const signal = options.signal ? AbortSignal.any([options.signal, lifetime.signal]) : lifetime.signal;
       await ensureAccountModels(options.provider, signal);
       const models = modelsForRoute(options.provider);
-      if (models && !models.getModels().some(model => model.id === options.model)) fail('UNKNOWN_MODEL');
-      let descriptor = this.modelOf(snapshot, options.provider, options.model);
-      // A prepared descriptor may outlive an account switch. Use the current
-      // account scope when matching saved consumption consent, not the old one.
-      if (speedSelections) descriptor = await scopedSpeedModel(options.provider, descriptor);
-      const tier = speedSelections?.capture(options, descriptor);
+      const live = models.getModels().find(model => model.id === options.model);
+      if (!live) fail('UNKNOWN_MODEL');
+      const descriptor = this.modelOf(snapshot, options.provider, options.model);
+      // Authorize Speed from the current catalog, never the prepared snapshot.
+      // The prepared descriptor still owns reasoning, context and transport.
+      const tier = speedSelections?.capture(options, { ...live, provider: options.provider });
       if (tier !== undefined) {
         // A request-owned provider preserves the exact prepared descriptor and
         // hook. Never mutate the shared profile or another concurrent request.
         const profile = this.profileOf(snapshot, options.provider).piProvider;
         const requestModels = createModels(bindings.auth);
         requestModels.setProvider({ ...profile, getModels: () => [descriptor], getAllModels: () => [descriptor],
-          streamSimple: (model, context, nativeOptions) => profile.streamSimple(model, context, withSpeedPayload(nativeOptions, tier)),
+          streamSimple: (model, context, nativeOptions) => profile.streamSimple(model, context, withSpeedPayload(nativeOptions, tier, async () => {
+            // pi-ai may have waited on attachments or rotated OAuth after entry.
+            // Before adding a billable field, fence the actual bearer and canonical tier.
+            await models.ensure({ signal: nativeOptions.signal });
+            const grant = await bindings.auth.credentials.read(options.provider, { signal: nativeOptions.signal });
+            const bearer = nativeOptions.apiKey ?? new Headers(nativeOptions.headers).get('authorization')?.replace(/^Bearer\s+/i, '');
+            if (!grant || grant.access !== bearer || speedAccountOf(grant) !== live.speedAccount) fail('SPEED_MODEL_CHANGED');
+            const current = models.getModels().find(item => item.id === options.model);
+            if (!current || current.speedAccount !== live.speedAccount) fail('SPEED_MODEL_CHANGED');
+            if (!modelSpeed({ ...current, provider: options.provider }).tiers.some(item => item.id === tier)) fail('UNSUPPORTED_SPEED');
+          })),
         });
         snapshot = { ...snapshot, models: requestModels };
       }
@@ -191,7 +193,18 @@ export async function apply(ctx, { kimiDatasource = false, grokXSearch = false, 
     const selections = await createSpeedHost(scope, { adapterUrl, isConversation: isAgentLoopRequest,
       modelFor: async (provider, model, signal) => {
         await ensureAccountModels(provider, signal);
-        return scopedSpeedModel(provider, adapter.modelOf(adapter.current(), provider, model));
+        return adapter.modelOf(adapter.current(), provider, model);
+      },
+      displayModelFor: async (provider, model, signal) => {
+        const models = modelsForRoute(provider);
+        if (!models) fail('MODEL_CATALOG_UNAVAILABLE');
+        signal = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal;
+        const view = await models.observe({ signal });
+        if (view.failure || view.error || view.missing) fail(view.failure ?? view.error ?? 'MISSING_CREDENTIAL');
+        if (!view.current) await models.ensure({ signal });
+        const descriptor = (view.current ? view.models : models.getModels()).find(item => item.id === model);
+        if (!descriptor) fail('UNKNOWN_MODEL');
+        return { ...descriptor, provider };
       },
     });
     scope.effect(() => {

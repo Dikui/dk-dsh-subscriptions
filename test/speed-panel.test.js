@@ -6,9 +6,11 @@ import { panelHarness } from './panel-harness.js';
 function fixture() {
   let current = { provider: 'subscription-openai-codex', model: 'tiered-model' };
   const saved = new Map(), calls = [];
+  let directoryState = { groups: [], routable: true };
   return {
     calls,
-    speed: { sessionId: 'session-a', directory: { subscribe: () => () => {}, getSnapshot: () => ({ current, pending: null }) }, load() {} },
+    speed: { sessionId: 'session-a', directory: { subscribe: () => () => {}, getSnapshot: () => ({ current, pending: null, ...directoryState }) }, load() {} },
+    setDirectory(state) { directoryState = state; },
     setModel(provider, model) { current = { provider, model }; },
     async fetch(path, options) {
       assert.equal(path, '/api/subscriptions-lite/speed');
@@ -17,7 +19,7 @@ function fixture() {
       const key = [input.sessionId, input.provider, input.model].join('/');
       if (input.action === 'speed-select') saved.set(key, input.tier);
       return Response.json({ sessionId: input.sessionId, provider: input.provider, model: input.model,
-        selected: saved.get(key) ?? 'default', stale: false,
+        selected: saved.get(key) ?? 'default', stale: false, viewScope: 'synthetic-view',
         tiers: input.model === 'tiered-model' ? [{ id: 'default', name: 'Normal' }, { id: 'priority', name: 'Fast' }, { id: 'ultrafast', name: 'Ultrafast' }]
           : input.provider === 'subscription-xai' ? [{ id: 'default', name: 'Normal' }, { id: 'priority', name: 'Priority' }]
             : [{ id: 'default', name: 'Normal' }],
@@ -60,7 +62,7 @@ test('selecting Fast or Ultrafast saves directly without a confirmation popup', 
         assert.equal(select.props.value, 'default');
         await select.props.onChange({ target: { value: tier } }); await panel.flush();
         assert.equal(confirmations, 0);
-        assert.equal(server.calls.filter(call => call.action === 'speed-select').length, 1);
+        assert.deepEqual(server.calls.filter(call => call.action === 'speed-select').map(call => call.viewScope), ['synthetic-view']);
         assert.equal(panel.nodes().find(node => node.type === 'select').props.value, tier);
       } finally { panel.dispose(); }
     }
@@ -103,6 +105,10 @@ test('saving Speed shows the chosen tier without transient toolbar text', async 
     try {
       savingWork = panel.nodes().find(node => node.type === 'select').props.onChange({ target: { value: 'priority' } });
       await panel.flush();
+      server.setDirectory({ groups: [], routable: null }); await panel.rerender(); // directory reloading
+      server.setDirectory({ groups: [{ id: 'subscription-openai-codex', models: [{ id: 'tiered-model' }] }], routable: true });
+      await panel.rerender();
+      assert.equal(server.calls.filter(call => call.action === 'speed-state').length, 1, 'reload must not supersede this save');
       const savingSelect = panel.nodes().find(node => node.type === 'select');
       assert.equal(savingSelect.props.value, 'priority');
       assert.equal(panel.text(panel.nodes().find(node => node.props.className === 'sl-speed-value')), 'Fast',
@@ -131,6 +137,47 @@ test('a failed Speed save reports an error and retry restores the persisted tier
     await panel.click('Speed unavailable · retry', null);
     assert.equal(panel.nodes().find(node => node.type === 'select').props.value, 'default');
   } finally { panel.dispose(); }
+});
+
+test('a same-model catalog change during save is reconciled after the old reply arrives', async () => {
+  const server = fixture(), delayed = Promise.withResolvers(); let revoked = false;
+  const panel = await panelHarness({ ...server, fetch: async (path, options) => {
+    const response = await server.fetch(path, options);
+    if (JSON.parse(options.body).action === 'speed-select') await delayed.promise;
+    else if (revoked) return Response.json({ ...await response.json(), selected: 'default', tiers: [{ id: 'default', name: 'Normal' }] });
+    return response;
+  } });
+  try {
+    const save = panel.nodes().find(node => node.type === 'select').props.onChange({ target: { value: 'priority' } });
+    await panel.flush(); revoked = true;
+    server.setDirectory({ groups: [], routable: true }); await panel.rerender();
+    assert.equal(panel.nodes().find(node => node.type === 'select').props.value, 'priority');
+    delayed.resolve(); await save; await panel.flush();
+    const select = panel.nodes().find(node => node.type === 'select');
+    assert.equal(select.props.value, 'default'); assert.ok(select.props.disabled);
+  } finally { delayed.resolve(); panel.dispose(); }
+});
+
+test('removal and session changes discard late saves, including for the same model id', async () => {
+  for (const change of ['remove', 'session']) {
+    const server = fixture(), release = Promise.withResolvers(); let signal;
+    const panel = await panelHarness({ ...server, fetch: async (path, options) => {
+      if (JSON.parse(options.body).action === 'speed-select') { signal = options.signal; await release.promise; }
+      return server.fetch(path, options);
+    } });
+    try {
+      const save = panel.nodes().find(node => node.type === 'select').props.onChange({ target: { value: 'priority' } });
+      await panel.flush();
+      if (change === 'remove') server.setDirectory({ groups: [], routable: false });
+      else server.speed.sessionId = 'session-b';
+      await panel.rerender();
+      assert.ok(signal.aborted);
+      release.resolve(); await save; await panel.flush();
+      const select = panel.nodes().find(node => node.type === 'select');
+      if (change === 'remove') assert.equal(select, undefined);
+      else assert.equal(select.props.value, 'default');
+    } finally { release.resolve(); panel.dispose(); }
+  }
 });
 
 test('a late save response cannot replace the newly selected model’s Speed', async () => {
