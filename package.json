@@ -1,6 +1,6 @@
 {
   "name": "dk-dsh-subscriptions",
-  "version": "0.0.7",
+  "version": "0.0.8",
   "private": true,
   "type": "module",
   "description": "Minimal isolated OAuth connections for coding subscriptions in DeepSeek Harness",
