@@ -310,10 +310,12 @@ window.__ModuleLoader__.load({
     `;
     const quotaProviderNames = { 'openai-codex': 'OpenAI · ChatGPT', 'kimi-coding': 'Kimi Code', xai: 'Grok', 'opencode-go': 'OpenCode Go' };
     const quotaProviders = ['openai-codex', 'kimi-coding', 'xai', 'opencode-go'];
-    const quotaIcon = h('svg', { viewBox: '0 0 16 16', width: 15, height: 15, 'aria-hidden': true, focusable: false },
-      h('path', { d: 'M2.8 12.2a5.2 5.2 0 0 1 10.4 0', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4, 'stroke-linecap': 'round' }),
-      h('path', { d: 'M8 12.2 10.5 8.4', fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4, 'stroke-linecap': 'round' }),
-      h('circle', { cx: 8, cy: 12.2, r: 1.1, fill: 'currentColor' }));
+    // A round dial sized to the footer's refresh mark: 5.6 radius and 1.4 stroke, with a bottom
+    // opening and a pivot dot so it reads as a gauge rather than a clock.
+    const quotaIcon = h('svg', { viewBox: '0 0 16 16', width: 15, height: 15, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.4, 'stroke-linecap': 'round', 'stroke-linejoin': 'round', 'aria-hidden': true, focusable: false },
+      h('path', { d: 'M5.2 12.85A5.6 5.6 0 1 1 10.8 12.85' }),
+      h('path', { d: 'M8 8 10.83 5.17' }),
+      h('circle', { cx: 8, cy: 8, r: 1.15, fill: 'currentColor', stroke: 'none' }));
     // Sidebar footer gauge: every subscription account, refreshed when hovered.
     function SidebarQuota() {
       React.useSyncExternalStore(subscribe, snapshot, snapshot);
